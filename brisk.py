@@ -19,6 +19,8 @@ def run_brisk(image_path=None):
     """
     print("Running BRISK Algorithm...")
     
+    keypoints = []
+    
     if image_path:
         # Load image if path provided
         try:
@@ -56,7 +58,7 @@ def run_brisk(image_path=None):
     }
     
     if image_path:
-        results["keypoints_count"] = len(keypoints) if 'keypoints' in locals() else 0
+        results["keypoints_count"] = len(keypoints)
     
     print("BRISK Algorithm completed")
     return results
