@@ -126,7 +126,7 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         current_search_idx = search_start
         frames_scanned = 0
 
-        candidates = []
+        raw_candidates = []
 
         while frames_scanned < search_window:
             ret2, frame2 = cap2.read()
@@ -138,24 +138,69 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
 
             if des2 is not None and len(kp2) >= 10:
                 matches = bf.match(des1, des2)
-                score = len(matches)
 
-                # Heuristic: Penalize distance from expected position?
-                # This helps if we have multiple similar frames (e.g. repeated patterns)
-                # We prefer the one closer to where we expect to be.
-                # For now, let's just use raw score.
+                # Filter matches by Hamming distance to remove noise
+                good_matches = [m for m in matches if m.distance < 50]
 
-                if score > 10: # Minimum threshold
-                    candidates.append((current_search_idx, score))
+                # Initial filter by match count to save RANSAC time
+                if len(good_matches) > 4:
+                    raw_candidates.append({
+                        "idx": current_search_idx,
+                        "matches": good_matches,
+                        "kp2": kp2
+                    })
 
             current_search_idx += 1
             frames_scanned += 1
 
-        # Select best candidate
-        if candidates:
-            # Sort by score descending
-            candidates.sort(key=lambda x: x[1], reverse=True)
-            best_v2_idx, best_match_score = candidates[0]
+        # Process candidates with Branch and Bound optimization
+        # We want to find the candidate with max (inliers - penalty).
+        # We visit candidates closest to expected_pos first.
+        # We skip RANSAC if (raw_matches - penalty) <= current_best_score.
+
+        expected_pos = last_best_v2_frame + sample_rate
+
+        # Sort by distance from expected position (closest first)
+        raw_candidates.sort(key=lambda x: abs(x["idx"] - expected_pos))
+
+        best_weighted_score = -float('inf')
+
+        # Also keep track of the raw match score for logging
+        best_match_raw_score = 0
+
+        for cand in raw_candidates:
+            idx = cand["idx"]
+            good_matches = cand["matches"]
+            kp2 = cand["kp2"]
+
+            dist = abs(idx - expected_pos)
+            penalty = dist * 4.0 # Penalty: 4.0 point per frame of distance (Strong constraint)
+
+            # Upper bound: even if all good matches are inliers
+            max_possible_score = len(good_matches) - penalty
+
+            if max_possible_score <= best_weighted_score:
+                continue
+
+            # Run RANSAC
+            inlier_count = 0
+            if len(good_matches) >= 4:
+                src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+                dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+
+                M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+                if mask is not None:
+                    inlier_count = int(np.sum(mask))
+
+            weighted = inlier_count - penalty
+
+            if weighted > best_weighted_score:
+                best_weighted_score = weighted
+                best_v2_idx = idx
+                best_match_raw_score = inlier_count # We return the raw score (inliers) for display
+
+        if best_v2_idx != -1 and best_weighted_score > -100: # Threshold?
+            best_match_score = best_match_raw_score
 
             # Simple velocity update?
             # if best_v2_idx > last_best_v2_frame:
