@@ -14,7 +14,7 @@ from src.alignment.core import align_videos
 from src.alignment.utils import filter_outliers_and_smooth
 from src.alignment.visualization import plot_alignment, create_side_by_side_video, generate_html_report
 
-DATASET_DIR = "./data"
+DATASET_DIR = "../dataset"
 ALGORITHMS = ["ORB", "BRISK", "AKAZE"]
 
 def get_available_plans():
