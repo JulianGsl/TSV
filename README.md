@@ -4,21 +4,27 @@ Master Thesis job - Image alignment on rail track
 ## Description
 
 This project implements three different algorithms for image alignment on rail tracks:
-- **OCR** (Optical Character Recognition)
+- **ORB** (Oriented FAST and Rotated BRIEF)
 - **BRISK** (Binary Robust Invariant Scalable Keypoints)
 - **AKAZE** (Accelerated-KAZE)
+
+The goal is to align two videos of the same track taken at different speeds.
 
 ## Project Structure
 
 ```
-TSV/
-├── main.py           # Main file that calls all three algorithms
-├── ocr.py            # OCR algorithm implementation
-├── brisk.py          # BRISK algorithm implementation
-├── akaze.py          # AKAZE algorithm implementation
-├── dataset/          # Directory for videos and images
-├── requirements.txt  # Python dependencies
-└── README.md         # This file
+.
+├── data/               # Directory containing Plan folders (videos)
+├── scripts/            # Executable scripts
+│   ├── run_alignment.py      # Main entry point
+│   └── generate_test_data.py # Helper to create dummy videos
+├── src/                # Source code
+│   └── alignment/      # Core logic package
+│       ├── algorithms/ # ORB, BRISK, AKAZE implementations
+│       ├── core.py     # Alignment logic
+│       ├── utils.py    # Post-processing
+│       └── visualization.py
+└── requirements.txt    # Dependencies
 ```
 
 ## Installation
@@ -30,25 +36,37 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Run all three algorithms
-
-```bash
-python main.py
+### 1. Prepare Data
+Place your videos in the `data/` directory using the following structure:
+```
+data/
+  Plan1/
+    video1.mp4
+    video2.mp4
+  Plan2/
+    ...
 ```
 
-Or with an image:
+If you don't have data, you can generate a test plan:
 ```bash
-python main.py path/to/image.jpg
+python scripts/generate_test_data.py
 ```
 
-### Run individual algorithms
-
+### 2. Run Alignment
+Execute the main script:
 ```bash
-python ocr.py
-python brisk.py
-python akaze.py
+python scripts/run_alignment.py
+```
+Follow the interactive prompts to select a plan, or run with arguments:
+```bash
+python scripts/run_alignment.py PlanTest
 ```
 
-## Dataset
+## Outputs
 
-Place your videos and images in the `dataset/` directory. The user is responsible for configuring the photos.
+For each algorithm (ORB, BRISK, AKAZE), the script generates:
+- `alignment_<algo>_raw.csv`: Raw alignment data.
+- `alignment_<algo>_clean.csv`: Post-processed (smoothed) alignment data.
+- `plot_<algo>.png`: Visualization of the alignment path.
+- `comparison_<algo>.mp4`: Side-by-side video comparison.
+- `report_<algo>.html`: Summary report.
