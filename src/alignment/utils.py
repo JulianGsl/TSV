@@ -44,14 +44,20 @@ def filter_outliers_and_smooth(matches, window_size=5):
             velocities.append(velocity)
 
     # Calculate median and MAD (Median Absolute Deviation) for robust outlier detection
-    if len(velocities) > 3:
+    if len(velocities) >= 2:
         median_velocity = np.median(velocities)
-        mad = np.median([abs(v - median_velocity) for v in velocities])
+        deviations = [abs(v - median_velocity) for v in velocities]
+        mad = np.median(deviations)
+        
+        # Handle zero MAD case (all velocities identical) by using a small tolerance
+        if mad < 0.01:
+            mad = 0.1  # Minimum tolerance to allow slight variations
+        
         # Use MAD-based threshold (more robust than std for outliers)
         velocity_threshold_low = max(0, median_velocity - 3 * mad)
         velocity_threshold_high = median_velocity + 3 * mad
     else:
-        # Fallback to simple thresholds
+        # Fallback to simple thresholds for first match
         velocity_threshold_low = 0
         velocity_threshold_high = 5.0
 
@@ -89,7 +95,7 @@ def filter_outliers_and_smooth(matches, window_size=5):
                 v2_end = filtered[i+1]['v2_frame']
                 v2_step = (v2_end - v2_start) / v1_gap
                 
-                for j in range(1, v1_gap):
+                for j in range(1, int(v1_gap)):  # Explicit int conversion for type safety
                     interp_v1 = filtered[i]['v1_frame'] + j
                     interp_v2 = int(v2_start + j * v2_step)
                     interpolated.append({
@@ -111,8 +117,8 @@ def filter_outliers_and_smooth(matches, window_size=5):
         return filtered
 
     # Gaussian-weighted moving average for smoother results
-    # Create gaussian kernel
-    sigma = window_size / 4.0
+    # Create gaussian kernel with minimum sigma for numerical stability
+    sigma = max(window_size / 4.0, 0.5)  # Prevent very small sigma values
     x = np.arange(window_size) - window_size // 2
     gaussian_kernel = np.exp(-0.5 * (x / sigma) ** 2)
     gaussian_kernel = gaussian_kernel / gaussian_kernel.sum()

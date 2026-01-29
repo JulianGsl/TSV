@@ -74,7 +74,6 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
     # We estimate velocity to predict the center of the search window
     # Initial velocity = 1.0 (assuming same speed)
     estimated_velocity = 1.0
-    velocity_history = []  # Track recent velocities for adaptive estimation
     velocity_confidence = 0.0  # Confidence in velocity estimate (0-1)
 
     # Loop through Video 1
@@ -116,11 +115,14 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 estimated_velocity = 0.7 * estimated_velocity + 0.3 * new_velocity
                 
                 # Update velocity confidence based on consistency
-                velocity_std = np.std(velocities) if len(velocities) > 1 else 1.0
-                velocity_confidence = max(0.0, min(1.0, 1.0 - velocity_std / 2.0))
-                velocity_history.extend(velocities)
-                if len(velocity_history) > 10:
-                    velocity_history = velocity_history[-10:]
+                velocity_std = np.std(velocities) if len(velocities) > 1 else 0.5
+                # Use a more robust confidence calculation based on coefficient of variation
+                mean_velocity = np.mean(velocities)
+                if mean_velocity > 0:
+                    coeff_of_variation = velocity_std / mean_velocity
+                    velocity_confidence = max(0.0, min(1.0, 1.0 - coeff_of_variation))
+                else:
+                    velocity_confidence = 0.0
 
         # Adaptive search window based on velocity confidence
         # Higher confidence = smaller window, faster processing
@@ -133,8 +135,8 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         # Predict center of search window
         predicted_v2_frame = last_best_v2_frame + int(sample_rate * estimated_velocity)
         
-        # Allow small backward search for robustness (10% of window)
-        backward_margin = int(adaptive_window * 0.1)
+        # Allow absolute backward search for robustness (fixed 15 frames minimum)
+        backward_margin = max(15, int(adaptive_window * 0.1))
         search_start = max(0, predicted_v2_frame - backward_margin)
         
         # Search ahead from predicted position
@@ -150,7 +152,6 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         cap2.set(cv2.CAP_PROP_POS_FRAMES, search_start)
 
         current_search_idx = search_start
-        frames_scanned = 0
 
         raw_candidates = []
 
@@ -182,8 +183,9 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                         if m.distance < 50:
                             good_matches.append(m)
                 
-                # Initial filter by match count to save RANSAC time
-                if len(good_matches) > 10:  # Increased threshold for better quality
+                # Filter by match count - use adaptive threshold based on detected features
+                min_matches = max(8, min(10, len(kp1) // 20))
+                if len(good_matches) >= min_matches:
                     raw_candidates.append({
                         "idx": current_search_idx,
                         "matches": good_matches,
@@ -191,7 +193,6 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                     })
 
             current_search_idx += 1
-            frames_scanned += 1
 
         # Process candidates with Branch and Bound optimization
         # We want to find the candidate with max (inliers - penalty).
@@ -211,6 +212,7 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         # Adaptive penalty based on velocity confidence
         # Higher confidence = higher penalty (more strict about position)
         # Lower confidence = lower penalty (more flexible search)
+        # Penalty factor ranges from 2.0 (low confidence) to 6.0 (high confidence)
         base_penalty = 4.0
         penalty_factor = base_penalty * (0.5 + velocity_confidence)
 
@@ -236,11 +238,11 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
 
                 # Improved RANSAC parameters:
                 # - ransacReprojThreshold: 3.0 (tighter than default 5.0)
-                # - maxIters: 2000 (more iterations for better accuracy)
+                # - maxIters: 1000 (balance between accuracy and performance)
                 # - confidence: 0.995 (higher confidence)
                 M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 
                                             ransacReprojThreshold=3.0,
-                                            maxIters=2000,
+                                            maxIters=1000,
                                             confidence=0.995)
                 if mask is not None:
                     inlier_count = int(np.sum(mask))
@@ -253,9 +255,9 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 best_match_raw_score = inlier_count # We return the raw score (inliers) for display
 
         # Adaptive threshold based on match quality and velocity confidence
-        # Higher quality matches = lower threshold needed
-        # More confident in velocity = can be more strict
-        acceptance_threshold = -100 + (velocity_confidence * 50)
+        # Higher velocity confidence = stricter threshold (more negative, harder to pass)
+        # Lower confidence = more lenient threshold (less negative, easier to pass)
+        acceptance_threshold = -100 - (velocity_confidence * 50)
         
         if best_v2_idx != -1 and best_weighted_score > acceptance_threshold:
             best_match_score = best_match_raw_score

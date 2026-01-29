@@ -23,7 +23,7 @@ def compute_features(image):
     # Initialize AKAZE detector with optimized parameters
     # descriptor_type: DESCRIPTOR_MLDB for better performance
     # descriptor_size: 0 (full size) for maximum precision
-    # threshold: 0.001 (lower = more features)
+    # threshold: 0.001 (default value, controls feature response threshold)
     akaze = cv2.AKAZE_create(
         descriptor_type=cv2.AKAZE_DESCRIPTOR_MLDB,
         descriptor_size=0,
