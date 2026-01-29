@@ -20,8 +20,15 @@ def compute_features(image):
     if image is None:
         return [], None
 
-    # Initialize AKAZE detector
-    akaze = cv2.AKAZE_create()
+    # Initialize AKAZE detector with optimized parameters
+    # descriptor_type: DESCRIPTOR_MLDB for better performance
+    # descriptor_size: 0 (full size) for maximum precision
+    # threshold: 0.001 (lower = more features)
+    akaze = cv2.AKAZE_create(
+        descriptor_type=cv2.AKAZE_DESCRIPTOR_MLDB,
+        descriptor_size=0,
+        threshold=0.001
+    )
 
     # Convert to grayscale if needed
     if len(image.shape) == 3:
