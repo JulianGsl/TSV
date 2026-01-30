@@ -33,7 +33,7 @@ def get_video_properties(video_path):
     cap.release()
     return props
 
-def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, search_window=150):
+def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, search_window=150, use_velocity=True):
     """
     Aligns two videos by finding corresponding frames.
 
@@ -43,6 +43,8 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         algo_name (str): The algorithm to use ("ORB", "BRISK", "AKAZE").
         sample_rate (int): Process every Nth frame of video1.
         search_window (int): Number of frames to search in video2 ahead of the last match.
+        use_velocity (bool): If True, uses velocity estimation to predict search window.
+                             If False, uses a fixed forward window from the last match.
 
     Returns:
         list: A list of matches dictionaries.
@@ -67,7 +69,16 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
     # crossCheck=False to enable ratio test
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
 
-    results = []
+    # Force Frame 0 -> Frame 0 match as per requirements
+    results = [{
+        "v1_frame": 0,
+        "v2_frame": 0,
+        "score": 100,
+        "algorithm": algo_name,
+        "kp1": [],
+        "kp2": [],
+        "matches": []
+    }]
 
     last_best_v2_frame = 0
 
@@ -77,12 +88,23 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
     velocity_confidence = 0.0  # Confidence in velocity estimate (0-1)
 
     # Loop through Video 1
+    # Start at 0, but since we forced 0, we can technically skip it if sample_rate aligns,
+    # but the loop logic below checks modulo.
+    # If sample_rate=1, loop 0 is processed. We should avoid duplicating.
+    # Let's start v1_frame_idx at 0, but skip if we already have it?
+    # No, cleaner to just let the loop run but maybe skip 0 explicitly if present?
+    # Actually, let's start after 0.
     v1_frame_idx = 0
 
     while True:
         ret1, frame1 = cap1.read()
         if not ret1:
             break
+
+        # Skip frame 0 as we forced it
+        if v1_frame_idx == 0:
+            v1_frame_idx += 1
+            continue
 
         if v1_frame_idx % sample_rate != 0:
             v1_frame_idx += 1
@@ -96,9 +118,8 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             v1_frame_idx += 1
             continue
 
-        # Dynamic Search Window with Velocity Prediction
-        # Update velocity estimate based on recent matches
-        if len(results) >= 2:
+        # Update velocity estimate if enabled
+        if use_velocity and len(results) >= 2:
             # Calculate velocity from last few matches
             recent_window = min(5, len(results))
             recent_results = results[-recent_window:]
@@ -116,7 +137,6 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 
                 # Update velocity confidence based on consistency
                 velocity_std = np.std(velocities) if len(velocities) > 1 else 0.5
-                # Use a more robust confidence calculation based on coefficient of variation
                 mean_velocity = np.mean(velocities)
                 if mean_velocity > 0:
                     coeff_of_variation = velocity_std / mean_velocity
@@ -124,29 +144,36 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 else:
                     velocity_confidence = 0.0
 
-        # Adaptive search window based on velocity confidence
-        # Higher confidence = smaller window, faster processing
-        adaptive_window = search_window
-        if velocity_confidence > 0.7:
-            adaptive_window = int(search_window * 0.7)
-        elif velocity_confidence < 0.3:
-            adaptive_window = int(search_window * 1.3)
+        # Define Search Window
+        if use_velocity:
+            # Adaptive search window based on velocity confidence
+            adaptive_window = search_window
+            if velocity_confidence > 0.7:
+                adaptive_window = int(search_window * 0.7)
+            elif velocity_confidence < 0.3:
+                adaptive_window = int(search_window * 1.3)
 
-        # Predict center of search window
-        predicted_v2_frame = last_best_v2_frame + int(sample_rate * estimated_velocity)
-        
-        # Allow absolute backward search for robustness (fixed 15 frames minimum)
-        backward_margin = max(15, int(adaptive_window * 0.1))
-        search_start = max(0, predicted_v2_frame - backward_margin)
-        
-        # Search ahead from predicted position
-        search_end = search_start + adaptive_window
+            # Predict center of search window
+            predicted_v2_frame = last_best_v2_frame + int(sample_rate * estimated_velocity)
+
+            # Allow absolute backward search for robustness
+            backward_margin = max(15, int(adaptive_window * 0.1))
+            search_start = max(0, predicted_v2_frame - backward_margin)
+            search_end = search_start + adaptive_window
+        else:
+            # Fixed forward search from last match
+            # "Search 102 (V1) in 125 to 135 (V2)" logic
+            # Start slightly behind last match to allow for small errors
+            backward_margin = 5
+            search_start = max(0, last_best_v2_frame - backward_margin)
+            search_end = search_start + search_window
 
         # Robustness: Use ratio test and RANSAC for better matching quality
         # Compare Frame1 against MANY Frame2 candidates to find best match
 
         best_match_score = -1
         best_v2_idx = -1
+        best_candidate = None
 
         # Seek to start of search
         cap2.set(cv2.CAP_PROP_POS_FRAMES, search_start)
@@ -199,7 +226,12 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         # We visit candidates closest to expected_pos first.
         # We skip RANSAC if (raw_matches - penalty) <= current_best_score.
 
-        expected_pos = predicted_v2_frame
+        # If using velocity, bias towards predicted position.
+        # If not, bias towards start of search window (closest to last match).
+        if use_velocity:
+            expected_pos = predicted_v2_frame
+        else:
+            expected_pos = search_start
 
         # Sort by distance from expected position (closest first)
         raw_candidates.sort(key=lambda x: abs(x["idx"] - expected_pos))
@@ -253,6 +285,7 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 best_weighted_score = weighted
                 best_v2_idx = idx
                 best_match_raw_score = inlier_count # We return the raw score (inliers) for display
+                best_candidate = cand
 
         # Adaptive threshold based on match quality and velocity confidence
         # Higher velocity confidence = stricter threshold (more negative, harder to pass)
@@ -268,7 +301,10 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 "v1_frame": v1_frame_idx,
                 "v2_frame": best_v2_idx,
                 "score": best_match_score,
-                "algorithm": algo_name
+                "algorithm": algo_name,
+                "kp1": kp1,
+                "kp2": best_candidate["kp2"],
+                "matches": best_candidate["matches"]
             })
 
             last_best_v2_frame = best_v2_idx

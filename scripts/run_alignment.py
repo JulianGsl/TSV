@@ -14,7 +14,7 @@ from src.alignment.core import align_videos
 from src.alignment.utils import filter_outliers_and_smooth
 from src.alignment.visualization import plot_alignment, create_side_by_side_video, generate_html_report
 
-DATASET_DIR = "../dataset"
+DATASET_DIR = os.path.join(os.path.dirname(__file__), "../dataset")
 ALGORITHMS = ["ORB", "BRISK", "AKAZE"]
 
 def get_available_plans():
@@ -44,9 +44,9 @@ def save_results_to_csv(filepath, results):
     except Exception as e:
         print(f"Error saving CSV: {e}")
 
-def process_plan(plan_name):
+def process_plan(plan_name, use_velocity=True):
     """Runs alignment algorithms on the specified plan."""
-    print(f"\nProcessing {plan_name}...")
+    print(f"\nProcessing {plan_name} (Velocity Estimation: {use_velocity})...")
 
     plan_dir = os.path.join(DATASET_DIR, plan_name)
     video1_path = os.path.join(plan_dir, "video1.mp4")
@@ -59,12 +59,17 @@ def process_plan(plan_name):
     for algo in ALGORITHMS:
         print(f"\n--- Running {algo} ---")
 
+        # Create algorithm specific directory
+        algo_dir = os.path.join(plan_dir, algo)
+        if not os.path.exists(algo_dir):
+            os.makedirs(algo_dir)
+
         # 1. Alignment
         # Sample rate 30 (1 per second assuming 30fps) for speed
-        raw_results = align_videos(video1_path, video2_path, algo_name=algo, sample_rate=30, search_window=150)
+        raw_results = align_videos(video1_path, video2_path, algo_name=algo, sample_rate=30, search_window=150, use_velocity=use_velocity)
 
         # Save Raw
-        raw_csv_path = os.path.join(plan_dir, f"alignment_{algo.lower()}_raw.csv")
+        raw_csv_path = os.path.join(algo_dir, "alignment_raw.csv")
         save_results_to_csv(raw_csv_path, raw_results)
 
         if not raw_results:
@@ -76,24 +81,23 @@ def process_plan(plan_name):
         clean_results = filter_outliers_and_smooth(raw_results)
 
         # Save Clean
-        clean_csv_path = os.path.join(plan_dir, f"alignment_{algo.lower()}_clean.csv")
+        clean_csv_path = os.path.join(algo_dir, "alignment_clean.csv")
         save_results_to_csv(clean_csv_path, clean_results)
 
         # 3. Visualization
         print("  > Generating visualizations...")
 
         # Plot
-        plot_path = os.path.join(plan_dir, f"plot_{algo.lower()}.png")
+        plot_path = os.path.join(algo_dir, "plot.png")
         plot_alignment(clean_results, plot_path)
 
-        # Video (Optional - can be slow)
-        # We only generate a short clip or low FPS version?
-        # Let's generate it for the first 50 matches to demonstrate
-        video_out_path = os.path.join(plan_dir, f"comparison_{algo.lower()}.mp4")
-        create_side_by_side_video(video1_path, video2_path, clean_results, video_out_path, max_frames=500)
+        # Video
+        # We use raw_results to show keypoint matches
+        video_out_path = os.path.join(algo_dir, "comparison.mp4")
+        create_side_by_side_video(video1_path, video2_path, raw_results, video_out_path, max_frames=500)
 
         # HTML Report
-        report_path = os.path.join(plan_dir, f"report_{algo.lower()}.html")
+        report_path = os.path.join(algo_dir, "report.html")
         stats = {
             "algorithm": algo,
             "avg_score": sum(r["score"] for r in raw_results) / len(raw_results) if raw_results else 0
@@ -112,6 +116,9 @@ def main():
         return
 
     # Argument handling for automation
+    use_velocity = True
+    selected_plans = []
+
     if len(sys.argv) > 1:
         arg = sys.argv[1]
         if arg.lower() == "all":
@@ -133,7 +140,6 @@ def main():
 
         choice = input("\nSelect a plan number or option: ").strip().lower()
 
-        selected_plans = []
         if choice == 'a':
             selected_plans = plans
         elif choice == 'q':
@@ -150,9 +156,13 @@ def main():
             print("Invalid input.")
             return
 
+        # Ask for velocity prediction
+        use_velocity_input = input("Use velocity prediction? (y/n, default y): ").strip().lower()
+        use_velocity = use_velocity_input != 'n'
+
     # Process selected plans
     for plan in selected_plans:
-        process_plan(plan)
+        process_plan(plan, use_velocity=use_velocity)
 
     print("\nProcessing complete.")
 

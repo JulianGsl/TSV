@@ -51,19 +51,25 @@ def create_side_by_side_video(video1_path, video2_path, matches, output_path, ma
     height = int(cap1.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap1.get(cv2.CAP_PROP_FPS)
 
-    # Output writer
-    out_width = width * 2
-    out_height = height
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (out_width, out_height))
-
-    # Convert matches to a lookup dict for fast access: v1_frame -> v2_frame
-    match_lookup = {m["v1_frame"]: m["v2_frame"] for m in matches}
+    # Convert matches to a lookup dict for fast access
+    # We store the full match object to access keypoints
+    match_lookup = {m["v1_frame"]: m for m in matches}
     sorted_v1_frames = sorted(match_lookup.keys())
 
     if not sorted_v1_frames:
         print("No matches to visualize.")
         return
+
+    # Check if we have keypoints to visualize
+    has_keypoints = "kp1" in matches[0] if matches else False
+
+    # Output writer
+    # If using drawMatches, the width might be different if images differ in size,
+    # but we will resize to fit the side-by-side view.
+    out_width = width * 2
+    out_height = height
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (out_width, out_height))
 
     min_frame = sorted_v1_frames[0]
     max_frame = sorted_v1_frames[-1]
@@ -93,17 +99,14 @@ def create_side_by_side_video(video1_path, video2_path, matches, output_path, ma
             break
 
         # Determine which V2 frame to show
-        target_v2_frame = match_lookup.get(current_v1_frame)
+        match_obj = match_lookup.get(current_v1_frame)
 
-        # Simple hold-last-value interpolation if missing (or strictly follow matches?)
-        # Since we might have subsampled, let's just skip frames that aren't in the match list
-        # to make the video purely about the matches found.
-        if target_v2_frame is None:
-            # If we want to show a continuous video, we should interpolate.
-            # But users might want to see EXACTLY what matched.
-            # Let's just continue reading V1 until we hit a match.
+        # Skip frames that aren't in the match list
+        if match_obj is None:
             current_v1_frame += 1
             continue
+
+        target_v2_frame = match_obj["v2_frame"]
 
         # Seek V2
         if target_v2_frame != last_v2_frame:
@@ -114,12 +117,28 @@ def create_side_by_side_video(video1_path, video2_path, matches, output_path, ma
         if not ret2:
             break # V2 ended
 
-        # Combine
-        # Resize if needed (assuming same size for now)
-        if frame2.shape != frame1.shape:
-             frame2 = cv2.resize(frame2, (width, height))
+        # Visualization
+        combined = None
 
-        combined = np.hstack((frame1, frame2))
+        if has_keypoints and "matches" in match_obj and match_obj["matches"]:
+            # Use drawMatches to show the links
+            # We don't resize frame2 before this to ensure keypoints align
+            kp1 = match_obj["kp1"]
+            kp2 = match_obj["kp2"]
+            good_matches = match_obj["matches"]
+
+            # drawMatches creates the combined image
+            combined = cv2.drawMatches(frame1, kp1, frame2, kp2, good_matches, None,
+                                      flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+        else:
+            # Fallback to simple stacking
+            if frame2.shape != frame1.shape:
+                 frame2 = cv2.resize(frame2, (width, height))
+            combined = np.hstack((frame1, frame2))
+
+        # Resize combined image to match the video writer output size
+        if combined.shape[0] != out_height or combined.shape[1] != out_width:
+            combined = cv2.resize(combined, (out_width, out_height))
 
         # Add text
         cv2.putText(combined, f"V1 Frame: {current_v1_frame}", (10, 30),

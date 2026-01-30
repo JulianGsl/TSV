@@ -44,7 +44,7 @@ def create_moving_rect_video(filename, width=640, height=480, fps=30, duration=5
     print(f"Created {filename}")
 
 def main():
-    dataset_dir = "./data"
+    dataset_dir = "./dataset"
     plan_dir = os.path.join(dataset_dir, "PlanTest")
 
     if not os.path.exists(plan_dir):
