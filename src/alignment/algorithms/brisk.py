@@ -20,8 +20,11 @@ def compute_features(image):
     if image is None:
         return [], None
 
-    # Initialize BRISK detector
-    brisk = cv2.BRISK_create()
+    # Initialize BRISK detector with optimized parameters for rail track detection
+    # thresh: 30 (default) for good corner detection
+    # octaves: 4 for multi-scale detection
+    # patternScale: 1.0 for standard pattern size
+    brisk = cv2.BRISK_create(thresh=30, octaves=4, patternScale=1.0)
 
     # Convert to grayscale if needed
     if len(image.shape) == 3:

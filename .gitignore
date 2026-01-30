@@ -77,3 +77,9 @@ Thumbs.db
 *.bmp
 *.tif
 *.tiff
+
+# Alignment output files
+dataset/**/alignment_*.csv
+dataset/**/*.html
+dataset/**/*.png
+dataset/**/*.mp4

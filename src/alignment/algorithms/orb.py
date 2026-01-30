@@ -20,8 +20,11 @@ def compute_features(image):
     if image is None:
         return [], None
 
-    # Initialize ORB detector
-    orb = cv2.ORB_create()
+    # Initialize ORB detector with increased feature count for better precision
+    # nfeatures: 5000 features (up from 500 default) for more reliable matching
+    # scaleFactor: 1.2 for better scale invariance
+    # nlevels: 8 pyramid levels for multi-scale detection
+    orb = cv2.ORB_create(nfeatures=5000, scaleFactor=1.2, nlevels=8)
 
     # Convert to grayscale if needed
     if len(image.shape) == 3:

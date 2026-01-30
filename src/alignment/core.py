@@ -64,7 +64,8 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
 
     # Initialize Matcher
     # Use Hamming distance for binary descriptors (ORB, BRISK, AKAZE)
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    # crossCheck=False to enable ratio test
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
 
     results = []
 
@@ -73,6 +74,7 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
     # We estimate velocity to predict the center of the search window
     # Initial velocity = 1.0 (assuming same speed)
     estimated_velocity = 1.0
+    velocity_confidence = 0.0  # Confidence in velocity estimate (0-1)
 
     # Loop through Video 1
     v1_frame_idx = 0
@@ -94,28 +96,54 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             v1_frame_idx += 1
             continue
 
-        # Dynamic Search Window
-        # Instead of just searching from `last_best_v2_frame`, we predict where we *should* be.
-        # Predicted V2 = Last V2 + (Delta V1 * Velocity)
+        # Dynamic Search Window with Velocity Prediction
+        # Update velocity estimate based on recent matches
+        if len(results) >= 2:
+            # Calculate velocity from last few matches
+            recent_window = min(5, len(results))
+            recent_results = results[-recent_window:]
+            velocities = []
+            for i in range(1, len(recent_results)):
+                dv1 = recent_results[i]['v1_frame'] - recent_results[i-1]['v1_frame']
+                dv2 = recent_results[i]['v2_frame'] - recent_results[i-1]['v2_frame']
+                if dv1 > 0:
+                    velocities.append(dv2 / dv1)
+            
+            if velocities:
+                # Use exponential moving average with recent velocity
+                new_velocity = np.mean(velocities)
+                estimated_velocity = 0.7 * estimated_velocity + 0.3 * new_velocity
+                
+                # Update velocity confidence based on consistency
+                velocity_std = np.std(velocities) if len(velocities) > 1 else 0.5
+                # Use a more robust confidence calculation based on coefficient of variation
+                mean_velocity = np.mean(velocities)
+                if mean_velocity > 0:
+                    coeff_of_variation = velocity_std / mean_velocity
+                    velocity_confidence = max(0.0, min(1.0, 1.0 - coeff_of_variation))
+                else:
+                    velocity_confidence = 0.0
 
-        if len(results) > 1:
-            # Update velocity based on last few matches?
-            # Simple approach: just use the last confirmed match
-            # But we want to be robust.
-            pass
+        # Adaptive search window based on velocity confidence
+        # Higher confidence = smaller window, faster processing
+        adaptive_window = search_window
+        if velocity_confidence > 0.7:
+            adaptive_window = int(search_window * 0.7)
+        elif velocity_confidence < 0.3:
+            adaptive_window = int(search_window * 1.3)
 
-        # Center the window around the expected position
-        # We moved `sample_rate` frames in V1.
-        # predicted_move = int(sample_rate * estimated_velocity) # Unused for now
+        # Predict center of search window
+        predicted_v2_frame = last_best_v2_frame + int(sample_rate * estimated_velocity)
+        
+        # Allow absolute backward search for robustness (fixed 15 frames minimum)
+        backward_margin = max(15, int(adaptive_window * 0.1))
+        search_start = max(0, predicted_v2_frame - backward_margin)
+        
+        # Search ahead from predicted position
+        search_end = search_start + adaptive_window
 
-        search_start = max(0, last_best_v2_frame) # Don't go back too much?
-        # Actually, let's strictly go forward from last known good position?
-        # Or allow a small backward look in case of jitter?
-        # Let's say we look from `last_best` to `last_best + search_window`.
-
-        # Robustness: Look at TOP N matches, not just the single best.
-        # But here we are comparing Frame1 against MANY Frame2 candidates.
-        # We want the Frame2 that has the most matches with Frame1.
+        # Robustness: Use ratio test and RANSAC for better matching quality
+        # Compare Frame1 against MANY Frame2 candidates to find best match
 
         best_match_score = -1
         best_v2_idx = -1
@@ -124,11 +152,10 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         cap2.set(cv2.CAP_PROP_POS_FRAMES, search_start)
 
         current_search_idx = search_start
-        frames_scanned = 0
 
         raw_candidates = []
 
-        while frames_scanned < search_window:
+        while current_search_idx < search_end:
             ret2, frame2 = cap2.read()
             if not ret2:
                 break
@@ -137,13 +164,28 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             kp2, des2 = algo_module.compute_features(frame2)
 
             if des2 is not None and len(kp2) >= 10:
-                matches = bf.match(des1, des2)
-
-                # Filter matches by Hamming distance to remove noise
-                good_matches = [m for m in matches if m.distance < 50]
-
-                # Initial filter by match count to save RANSAC time
-                if len(good_matches) > 4:
+                # Use knnMatch for ratio test (Lowe's ratio test)
+                # k=2 to get the two best matches for each descriptor
+                knn_matches = bf.knnMatch(des1, des2, k=2)
+                
+                # Apply Lowe's ratio test to filter good matches
+                good_matches = []
+                for match_pair in knn_matches:
+                    # Ensure we have two matches
+                    if len(match_pair) == 2:
+                        m, n = match_pair
+                        # If best match is significantly better than second best
+                        if m.distance < 0.75 * n.distance:
+                            good_matches.append(m)
+                    elif len(match_pair) == 1:
+                        # If only one match, check if distance is reasonable
+                        m = match_pair[0]
+                        if m.distance < 50:
+                            good_matches.append(m)
+                
+                # Filter by match count - use adaptive threshold based on detected features
+                min_matches = max(8, min(10, len(kp1) // 20))
+                if len(good_matches) >= min_matches:
                     raw_candidates.append({
                         "idx": current_search_idx,
                         "matches": good_matches,
@@ -151,14 +193,13 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                     })
 
             current_search_idx += 1
-            frames_scanned += 1
 
         # Process candidates with Branch and Bound optimization
         # We want to find the candidate with max (inliers - penalty).
         # We visit candidates closest to expected_pos first.
         # We skip RANSAC if (raw_matches - penalty) <= current_best_score.
 
-        expected_pos = last_best_v2_frame + sample_rate
+        expected_pos = predicted_v2_frame
 
         # Sort by distance from expected position (closest first)
         raw_candidates.sort(key=lambda x: abs(x["idx"] - expected_pos))
@@ -167,6 +208,13 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
 
         # Also keep track of the raw match score for logging
         best_match_raw_score = 0
+        
+        # Adaptive penalty based on velocity confidence
+        # Higher confidence = higher penalty (more strict about position)
+        # Lower confidence = lower penalty (more flexible search)
+        # Penalty factor ranges from 2.0 (low confidence) to 6.0 (high confidence)
+        base_penalty = 4.0
+        penalty_factor = base_penalty * (0.5 + velocity_confidence)
 
         for cand in raw_candidates:
             idx = cand["idx"]
@@ -174,7 +222,7 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             kp2 = cand["kp2"]
 
             dist = abs(idx - expected_pos)
-            penalty = dist * 4.0 # Penalty: 4.0 point per frame of distance (Strong constraint)
+            penalty = dist * penalty_factor
 
             # Upper bound: even if all good matches are inliers
             max_possible_score = len(good_matches) - penalty
@@ -182,13 +230,20 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             if max_possible_score <= best_weighted_score:
                 continue
 
-            # Run RANSAC
+            # Run RANSAC with improved parameters
             inlier_count = 0
             if len(good_matches) >= 4:
                 src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
                 dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
-                M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+                # Improved RANSAC parameters:
+                # - ransacReprojThreshold: 3.0 (tighter than default 5.0)
+                # - maxIters: 1000 (balance between accuracy and performance)
+                # - confidence: 0.995 (higher confidence)
+                M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 
+                                            ransacReprojThreshold=3.0,
+                                            maxIters=1000,
+                                            confidence=0.995)
                 if mask is not None:
                     inlier_count = int(np.sum(mask))
 
@@ -199,15 +254,15 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 best_v2_idx = idx
                 best_match_raw_score = inlier_count # We return the raw score (inliers) for display
 
-        if best_v2_idx != -1 and best_weighted_score > -100: # Threshold?
+        # Adaptive threshold based on match quality and velocity confidence
+        # Higher velocity confidence = stricter threshold (more negative, harder to pass)
+        # Lower confidence = more lenient threshold (less negative, easier to pass)
+        acceptance_threshold = -100 - (velocity_confidence * 50)
+        
+        if best_v2_idx != -1 and best_weighted_score > acceptance_threshold:
             best_match_score = best_match_raw_score
 
-            # Simple velocity update?
-            # if best_v2_idx > last_best_v2_frame:
-            #     current_vel = (best_v2_idx - last_best_v2_frame) / sample_rate
-            #     estimated_velocity = 0.9 * estimated_velocity + 0.1 * current_vel
-
-            print(f"V1 {v1_frame_idx} -> V2 {best_v2_idx} (Score: {best_match_score})")
+            print(f"V1 {v1_frame_idx} -> V2 {best_v2_idx} (Score: {best_match_score}, Weighted: {best_weighted_score:.1f}, Vel: {estimated_velocity:.2f}, Conf: {velocity_confidence:.2f})")
 
             results.append({
                 "v1_frame": v1_frame_idx,
