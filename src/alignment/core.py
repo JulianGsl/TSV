@@ -33,16 +33,17 @@ def get_video_properties(video_path):
     cap.release()
     return props
 
-def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, search_window=150):
+def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, search_window=150, search_step=1):
     """
     Aligns two videos by finding corresponding frames.
 
     Args:
         video1_path (str): Path to the first video (reference).
-        video2_path (str): Path to the second video.
+        video2_path (str): The path to the second video.
         algo_name (str): The algorithm to use ("ORB", "BRISK", "AKAZE").
         sample_rate (int): Process every Nth frame of video1.
         search_window (int): Number of frames to search in video2 ahead of the last match.
+        search_step (int): Step size between candidate frames in video2 when searching (e.g., 10 to test 0,10,20...)
 
     Returns:
         list: A list of matches dictionaries.
@@ -70,11 +71,16 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
     results = []
 
     last_best_v2_frame = 0
+    last_matched_v1_frame = 0  # Track last V1 frame that had a match
 
     # We estimate velocity to predict the center of the search window
     # Initial velocity = 1.0 (assuming same speed)
+    # Can be < 1 if video2 is faster, > 1 if video2 is slower
     estimated_velocity = 1.0
     velocity_confidence = 0.0  # Confidence in velocity estimate (0-1)
+
+    # Track consecutive failures to expand search
+    consecutive_failures = 0
 
     # Loop through Video 1
     v1_frame_idx = 0
@@ -111,9 +117,11 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             
             if velocities:
                 # Use exponential moving average with recent velocity
+                # More reactive (0.5/0.5) at the start, more stable (0.8/0.2) once confident
                 new_velocity = np.mean(velocities)
-                estimated_velocity = 0.7 * estimated_velocity + 0.3 * new_velocity
-                
+                alpha = 0.5 + 0.3 * velocity_confidence  # Ranges from 0.5 to 0.8
+                estimated_velocity = alpha * estimated_velocity + (1 - alpha) * new_velocity
+
                 # Update velocity confidence based on consistency
                 velocity_std = np.std(velocities) if len(velocities) > 1 else 0.5
                 # Use a more robust confidence calculation based on coefficient of variation
@@ -132,13 +140,20 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         elif velocity_confidence < 0.3:
             adaptive_window = int(search_window * 1.3)
 
-        # Predict center of search window
-        predicted_v2_frame = last_best_v2_frame + int(sample_rate * estimated_velocity)
-        
-        # Allow absolute backward search for robustness (fixed 15 frames minimum)
-        backward_margin = max(15, int(adaptive_window * 0.1))
-        search_start = max(0, predicted_v2_frame - backward_margin)
-        
+        # Expand search window on consecutive failures
+        if consecutive_failures > 0:
+            expansion_factor = 1.0 + (consecutive_failures * 0.5)
+            adaptive_window = int(adaptive_window * min(expansion_factor, 3.0))
+
+        # Predict center of search window based on frames elapsed since last match
+        frames_since_last_match = v1_frame_idx - last_matched_v1_frame
+        predicted_v2_frame = last_best_v2_frame + int(frames_since_last_match * estimated_velocity)
+
+        # Allow backward search but don't go below last matched position (monotonicity)
+        # Use smaller backward margin to encourage forward progress
+        backward_margin = max(5, int(adaptive_window * 0.05))
+        search_start = max(last_best_v2_frame, predicted_v2_frame - backward_margin)
+
         # Search ahead from predicted position
         search_end = search_start + adaptive_window
 
@@ -149,13 +164,14 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         best_v2_idx = -1
 
         # Seek to start of search
-        cap2.set(cv2.CAP_PROP_POS_FRAMES, search_start)
-
         current_search_idx = search_start
 
         raw_candidates = []
 
+        # Iterate through candidate frames in video2 with given step (e.g., every 10 frames)
         while current_search_idx < search_end:
+            # Seek to the candidate frame index explicitly before reading (handles stepping)
+            cap2.set(cv2.CAP_PROP_POS_FRAMES, current_search_idx)
             ret2, frame2 = cap2.read()
             if not ret2:
                 break
@@ -192,7 +208,8 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                         "kp2": kp2
                     })
 
-            current_search_idx += 1
+            # Advance by the configured step (allows sparse candidate sampling)
+            current_search_idx += search_step
 
         # Process candidates with Branch and Bound optimization
         # We want to find the candidate with max (inliers - penalty).
@@ -212,8 +229,9 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         # Adaptive penalty based on velocity confidence
         # Higher confidence = higher penalty (more strict about position)
         # Lower confidence = lower penalty (more flexible search)
-        # Penalty factor ranges from 2.0 (low confidence) to 6.0 (high confidence)
-        base_penalty = 4.0
+        # Penalty factor ranges from 0.5 (low confidence) to 2.0 (high confidence)
+        # Reduced from previous values to be less conservative
+        base_penalty = 1.0
         penalty_factor = base_penalty * (0.5 + velocity_confidence)
 
         for cand in raw_candidates:
@@ -272,9 +290,11 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             })
 
             last_best_v2_frame = best_v2_idx
+            last_matched_v1_frame = v1_frame_idx
+            consecutive_failures = 0  # Reset on success
         else:
             # print(f"Frame {v1_frame_idx}: No good match found.")
-            pass
+            consecutive_failures += 1
 
         v1_frame_idx += 1
 
