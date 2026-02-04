@@ -349,3 +349,205 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
     cap2.release()
 
     return results
+
+
+def align_videos_robust(video1_path, video2_path, algo_name="ORB", sample_rate=1, 
+                       search_window=150, search_step=1, use_robust=True):
+    """
+    Aligns two videos using RobustAligner with bidirectional search.
+    
+    This function implements robust alignment with:
+    - Temporal continuity constraints
+    - Confidence validation
+    - Bidirectional search window (forward AND backward)
+    - Additional metrics: weighted, velocity, conf
+    
+    Args:
+        video1_path (str): Path to the first video (reference).
+        video2_path (str): Path to the second video.
+        algo_name (str): The algorithm to use ("ORB", "BRISK", "AKAZE").
+        sample_rate (int): Process every Nth frame of video1.
+        search_window (int): Search radius in video2 (bidirectional).
+        search_step (int): Step size between candidate frames in video2.
+        use_robust (bool): Use RobustAligner (True) or fallback to original (False).
+    
+    Returns:
+        list: A list of match dictionaries with keys:
+            - v1_frame: Frame index in video 1
+            - v2_frame: Frame index in video 2
+            - score: Raw match score
+            - weighted: Weighted score (score * conf * distance_penalty)
+            - velocity: Velocity estimate at this match
+            - conf: Confidence score (0-1)
+            - algorithm: Algorithm name
+    """
+    print(f"Aligning {video1_path} and {video2_path} using {algo_name} (Robust Mode)...")
+    
+    if algo_name not in ALGORITHMS:
+        print(f"Error: Unknown algorithm {algo_name}")
+        return []
+    
+    algo_module = ALGORITHMS[algo_name]
+    
+    cap1 = cv2.VideoCapture(video1_path)
+    cap2 = cv2.VideoCapture(video2_path)
+    
+    if not cap1.isOpened() or not cap2.isOpened():
+        print("Error: Could not open one or both videos.")
+        return []
+    
+    # Initialize Matcher
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    
+    # Initialize RobustAligner
+    from .robust_alignment import RobustAligner
+    aligner = RobustAligner(max_velocity=5, conf_threshold=0.3, history_size=10)
+    
+    results = []
+    last_best_v2_frame = 0
+    
+    # Loop through Video 1
+    v1_frame_idx = 0
+    
+    while True:
+        ret1, frame1 = cap1.read()
+        if not ret1:
+            break
+        
+        if v1_frame_idx % sample_rate != 0:
+            v1_frame_idx += 1
+            continue
+        
+        # Compute features for Frame 1
+        kp1, des1 = algo_module.compute_features(frame1)
+        
+        if des1 is None or len(kp1) < 10:
+            v1_frame_idx += 1
+            continue
+        
+        # Predict center of search based on velocity
+        velocity = aligner.compute_velocity()
+        predicted_v2_frame = last_best_v2_frame + int(sample_rate * velocity)
+        
+        # BIDIRECTIONAL search: both forward AND backward
+        # This is critical to correct errors from previous frames
+        search_radius = search_window // 2
+        search_start = max(0, predicted_v2_frame - search_radius)
+        search_end = predicted_v2_frame + search_radius
+        
+        # Collect candidates
+        raw_candidates = []
+        current_search_idx = search_start
+        
+        while current_search_idx < search_end:
+            cap2.set(cv2.CAP_PROP_POS_FRAMES, current_search_idx)
+            ret2, frame2 = cap2.read()
+            if not ret2:
+                break
+            
+            # Compute features for Frame 2
+            kp2, des2 = algo_module.compute_features(frame2)
+            
+            if des2 is not None and len(kp2) >= 10:
+                # Use knnMatch for ratio test
+                knn_matches = bf.knnMatch(des1, des2, k=2)
+                
+                # Apply Lowe's ratio test
+                good_matches = []
+                for match_pair in knn_matches:
+                    if len(match_pair) == 2:
+                        m, n = match_pair
+                        if m.distance < 0.75 * n.distance:
+                            good_matches.append(m)
+                    elif len(match_pair) == 1:
+                        m = match_pair[0]
+                        if m.distance < 50:
+                            good_matches.append(m)
+                
+                if len(good_matches) >= 8:
+                    raw_candidates.append({
+                        "idx": current_search_idx,
+                        "matches": good_matches,
+                        "kp2": kp2
+                    })
+            
+            current_search_idx += search_step
+        
+        if not raw_candidates:
+            v1_frame_idx += 1
+            continue
+        
+        # Compute confidence from score distribution
+        scores_for_conf = [(len(c["matches"]), c["idx"]) for c in raw_candidates]
+        best_cand_idx = max(range(len(scores_for_conf)), key=lambda i: scores_for_conf[i][0])
+        conf = aligner.compute_confidence(scores_for_conf, best_cand_idx)
+        
+        # Find best match using weighted scoring
+        best_weighted_score = -float('inf')
+        best_match = None
+        best_match_score = 0
+        
+        for cand in raw_candidates:
+            idx = cand["idx"]
+            good_matches = cand["matches"]
+            kp2 = cand["kp2"]
+            
+            # Run RANSAC for inlier detection
+            inlier_count = 0
+            if len(good_matches) >= 4:
+                src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+                dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+                
+                M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC,
+                                            ransacReprojThreshold=2.5,
+                                            maxIters=2000,
+                                            confidence=0.999)
+                if mask is not None:
+                    inlier_count = int(np.sum(mask))
+            
+            raw_score = inlier_count if inlier_count > 0 else len(good_matches)
+            distance_from_prediction = abs(idx - predicted_v2_frame)
+            weighted_score = aligner.compute_weighted_score(raw_score, distance_from_prediction, conf)
+            
+            if weighted_score > best_weighted_score:
+                best_weighted_score = weighted_score
+                best_match_score = raw_score
+                best_match = {
+                    'v2_frame': idx,
+                    'score': raw_score,
+                    'weighted': weighted_score,
+                    'conf': conf,
+                    'velocity': velocity
+                }
+        
+        # Accept match if confidence is sufficient
+        if best_match and conf >= aligner.conf_threshold:
+            print(f"V1 {v1_frame_idx} -> V2 {best_match['v2_frame']} "
+                  f"(Score: {best_match['score']:.1f}, Weighted: {best_match['weighted']:.1f}, "
+                  f"Vel: {best_match['velocity']:.2f}, Conf: {best_match['conf']:.2f})")
+            
+            result = {
+                "v1_frame": v1_frame_idx,
+                "v2_frame": best_match['v2_frame'],
+                "score": best_match['score'],
+                "weighted": best_match['weighted'],
+                "velocity": best_match['velocity'],
+                "conf": best_match['conf'],
+                "algorithm": algo_name
+            }
+            results.append(result)
+            
+            # Update aligner history
+            aligner.history.append({
+                'v1_frame': v1_frame_idx,
+                'v2_frame': best_match['v2_frame']
+            })
+            aligner.last_offset = best_match['v2_frame']
+            last_best_v2_frame = best_match['v2_frame']
+        
+        v1_frame_idx += 1
+    
+    cap1.release()
+    cap2.release()
+    
+    return results

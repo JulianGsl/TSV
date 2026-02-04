@@ -10,7 +10,7 @@ import csv
 # Add project root to path to allow importing src
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from src.alignment.core import align_videos
+from src.alignment.core import align_videos, align_videos_robust
 from src.alignment.utils import filter_outliers_and_smooth
 from src.alignment.visualization import plot_alignment, create_side_by_side_video, generate_html_report
 
@@ -37,9 +37,17 @@ def save_results_to_csv(filepath, results):
     try:
         with open(filepath, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(["v1_frame", "v2_frame", "score"])
+            # Include new metrics: weighted, velocity, conf
+            writer.writerow(["v1_frame", "v2_frame", "score", "weighted", "velocity", "conf"])
             for row in results:
-                writer.writerow([row["v1_frame"], row["v2_frame"], row.get("score", 0)])
+                writer.writerow([
+                    row["v1_frame"], 
+                    row["v2_frame"], 
+                    row.get("score", 0),
+                    row.get("weighted", 0),
+                    row.get("velocity", 1.0),
+                    row.get("conf", 0.0)
+                ])
         print(f"Saved results to {filepath}")
     except Exception as e:
         print(f"Error saving CSV: {e}")
@@ -63,11 +71,11 @@ def process_plan(plan_name):
         algo_dir = os.path.join(plan_dir, algo.lower())
         os.makedirs(algo_dir, exist_ok=True)
 
-        # 1. Alignment
+        # 1. Alignment using Robust mode with bidirectional search
         # Sample rate 15 (process every 15th frame of video1)
         # Search window 150, search_step 10 (test frames 0,10,20,... up to 150)
-        raw_results = align_videos(video1_path, video2_path, algo_name=algo,
-                                   sample_rate=15, search_window=150, search_step=10)
+        raw_results = align_videos_robust(video1_path, video2_path, algo_name=algo,
+                                         sample_rate=15, search_window=150, search_step=10)
 
         # Save Raw CSV
         raw_csv_path = os.path.join(algo_dir, "alignment_raw.csv")
