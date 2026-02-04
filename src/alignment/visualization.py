@@ -8,6 +8,274 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
+# Import algorithms for feature detection
+from .algorithms import orb, brisk, akaze
+
+ALGORITHMS = {
+    "ORB": orb,
+    "BRISK": brisk,
+    "AKAZE": akaze
+}
+
+
+def draw_simple_side_by_side(frame1, frame2):
+    """
+    Creates a simple side-by-side view of two frames without any feature visualization.
+
+    Args:
+        frame1: First frame (numpy array)
+        frame2: Second frame (numpy array)
+
+    Returns:
+        Combined frame (side by side)
+    """
+    h1, w1 = frame1.shape[:2]
+    h2, w2 = frame2.shape[:2]
+
+    # Resize frame2 if dimensions don't match
+    if h1 != h2 or w1 != w2:
+        frame2 = cv2.resize(frame2, (w1, h1))
+
+    return np.hstack((frame1, frame2))
+
+
+def draw_all_features(frame1, frame2, algorithm="ORB"):
+    """
+    Draws ALL detected keypoints on both frames (no matching, just feature detection).
+
+    Args:
+        frame1: First frame (numpy array)
+        frame2: Second frame (numpy array)
+        algorithm: Algorithm name to use for feature detection ("ORB", "BRISK", "AKAZE")
+
+    Returns:
+        Combined frame with all keypoints drawn, keypoint counts
+    """
+    algo_module = ALGORITHMS.get(algorithm.upper(), orb)
+
+    # Compute features for both frames
+    kp1, des1 = algo_module.compute_features(frame1)
+    kp2, des2 = algo_module.compute_features(frame2)
+
+    # Create copies to draw on
+    frame1_with_kp = frame1.copy()
+    frame2_with_kp = frame2.copy()
+
+    # Draw ALL keypoints on each frame (green circles)
+    frame1_with_kp = cv2.drawKeypoints(frame1_with_kp, kp1, None,
+                                        color=(0, 255, 0),
+                                        flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    frame2_with_kp = cv2.drawKeypoints(frame2_with_kp, kp2, None,
+                                        color=(0, 255, 0),
+                                        flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+
+    h1, w1 = frame1_with_kp.shape[:2]
+    h2, w2 = frame2_with_kp.shape[:2]
+
+    # Resize frame2 if dimensions don't match
+    if h1 != h2 or w1 != w2:
+        frame2_with_kp = cv2.resize(frame2_with_kp, (w1, h1))
+
+    combined = np.hstack((frame1_with_kp, frame2_with_kp))
+
+    # Add keypoint count info
+    cv2.putText(combined, f"Keypoints V1: {len(kp1)}", (10, combined.shape[0] - 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    cv2.putText(combined, f"Keypoints V2: {len(kp2)}", (w1 + 10, combined.shape[0] - 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+    return combined, len(kp1), len(kp2)
+
+
+def draw_matched_features_only(frame1, frame2, algorithm="ORB"):
+    """
+    Draws ONLY the matched keypoints on both frames with lines connecting them.
+    Non-matched keypoints are not displayed.
+
+    Args:
+        frame1: First frame (numpy array)
+        frame2: Second frame (numpy array)
+        algorithm: Algorithm name to use for feature detection ("ORB", "BRISK", "AKAZE")
+
+    Returns:
+        Combined frame with matched features only, match count
+    """
+    algo_module = ALGORITHMS.get(algorithm.upper(), orb)
+
+    # Compute features for both frames
+    kp1, des1 = algo_module.compute_features(frame1)
+    kp2, des2 = algo_module.compute_features(frame2)
+
+    # Create copies to draw on
+    frame1_draw = frame1.copy()
+    frame2_draw = frame2.copy()
+
+    h1, w1 = frame1.shape[:2]
+    h2, w2 = frame2.shape[:2]
+
+    # Resize frame2 if dimensions don't match
+    if h1 != h2 or w1 != w2:
+        frame2_draw = cv2.resize(frame2_draw, (w1, h1))
+
+    # Combine frames first
+    combined = np.hstack((frame1_draw, frame2_draw))
+
+    # Find good matches
+    good_matches = []
+    if des1 is not None and des2 is not None and len(kp1) >= 2 and len(kp2) >= 2:
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+
+        try:
+            knn_matches = bf.knnMatch(des1, des2, k=2)
+
+            # Apply Lowe's ratio test
+            for match_pair in knn_matches:
+                if len(match_pair) == 2:
+                    m, n = match_pair
+                    if m.distance < 0.75 * n.distance:
+                        good_matches.append(m)
+                elif len(match_pair) == 1:
+                    m = match_pair[0]
+                    if m.distance < 50:
+                        good_matches.append(m)
+        except cv2.error:
+            pass
+
+    # Draw only matched keypoints and their connections
+    max_lines = 100  # Limit for visualization clarity
+    if good_matches:
+        good_matches = sorted(good_matches, key=lambda x: x.distance)[:max_lines]
+
+        for match in good_matches:
+            pt1 = tuple(map(int, kp1[match.queryIdx].pt))
+            pt2 = tuple(map(int, kp2[match.trainIdx].pt))
+            pt2_offset = (pt2[0] + w1, pt2[1])
+
+            # Color based on match quality
+            if match.distance < 30:
+                color = (0, 255, 0)  # Green - excellent
+            elif match.distance < 50:
+                color = (0, 255, 255)  # Yellow - good
+            else:
+                color = (0, 165, 255)  # Orange - moderate
+
+            # Draw keypoint circles ONLY for matched points
+            cv2.circle(combined, pt1, 6, color, 2)  # Circle on frame1
+            cv2.circle(combined, pt2_offset, 6, color, 2)  # Circle on frame2
+
+            # Draw connection line
+            cv2.line(combined, pt1, pt2_offset, color, 1, cv2.LINE_AA)
+
+    # Add match count info
+    cv2.putText(combined, f"Matched Features: {len(good_matches)}", (10, combined.shape[0] - 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+    return combined, len(good_matches)
+
+
+def draw_features_and_matches(frame1, frame2, algorithm="ORB"):
+    """
+    Draws keypoints on both frames and draws match lines between corresponding features.
+    Shows ALL keypoints + match lines (legacy function for compatibility).
+
+    Args:
+        frame1: First frame (numpy array)
+        frame2: Second frame (numpy array)
+        algorithm: Algorithm name to use for feature detection ("ORB", "BRISK", "AKAZE")
+
+    Returns:
+        Combined frame with features and matches drawn
+    """
+    algo_module = ALGORITHMS.get(algorithm.upper(), orb)
+
+    # Compute features for both frames
+    kp1, des1 = algo_module.compute_features(frame1)
+    kp2, des2 = algo_module.compute_features(frame2)
+
+    # Create copies to draw on
+    frame1_with_kp = frame1.copy()
+    frame2_with_kp = frame2.copy()
+
+    # Draw keypoints on each frame
+    # Green circles for keypoints
+    frame1_with_kp = cv2.drawKeypoints(frame1_with_kp, kp1, None,
+                                        color=(0, 255, 0),
+                                        flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    frame2_with_kp = cv2.drawKeypoints(frame2_with_kp, kp2, None,
+                                        color=(0, 255, 0),
+                                        flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+
+    # Match features if descriptors are available
+    good_matches = []
+    if des1 is not None and des2 is not None and len(kp1) >= 2 and len(kp2) >= 2:
+        # Use BFMatcher with Hamming distance for binary descriptors
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+
+        try:
+            knn_matches = bf.knnMatch(des1, des2, k=2)
+
+            # Apply Lowe's ratio test
+            for match_pair in knn_matches:
+                if len(match_pair) == 2:
+                    m, n = match_pair
+                    if m.distance < 0.75 * n.distance:
+                        good_matches.append(m)
+                elif len(match_pair) == 1:
+                    m = match_pair[0]
+                    if m.distance < 50:
+                        good_matches.append(m)
+        except cv2.error:
+            pass  # If matching fails, just show keypoints without matches
+
+    # Combine the two frames side by side
+    h1, w1 = frame1_with_kp.shape[:2]
+    h2, w2 = frame2_with_kp.shape[:2]
+
+    # Resize frame2 if dimensions don't match
+    if h1 != h2 or w1 != w2:
+        frame2_with_kp = cv2.resize(frame2_with_kp, (w1, h1))
+
+    combined = np.hstack((frame1_with_kp, frame2_with_kp))
+
+    # Draw match lines between corresponding keypoints
+    # Limit to top matches for cleaner visualization
+    max_lines = 50  # Limit number of lines to draw
+    if good_matches:
+        # Sort by distance and take best matches
+        good_matches = sorted(good_matches, key=lambda x: x.distance)[:max_lines]
+
+        for match in good_matches:
+            # Get keypoint coordinates
+            pt1 = tuple(map(int, kp1[match.queryIdx].pt))
+            pt2 = tuple(map(int, kp2[match.trainIdx].pt))
+
+            # Offset pt2 by the width of frame1 (since it's on the right side)
+            pt2_offset = (pt2[0] + w1, pt2[1])
+
+            # Draw line with color based on match quality (green = good, yellow = moderate)
+            # Use match distance to determine color
+            if match.distance < 30:
+                color = (0, 255, 0)  # Green - excellent match
+            elif match.distance < 50:
+                color = (0, 255, 255)  # Yellow - good match
+            else:
+                color = (0, 165, 255)  # Orange - moderate match
+
+            cv2.line(combined, pt1, pt2_offset, color, 1, cv2.LINE_AA)
+
+            # Draw small circles at match points
+            cv2.circle(combined, pt1, 4, (255, 0, 0), -1)  # Blue circle on frame1
+            cv2.circle(combined, pt2_offset, 4, (255, 0, 0), -1)  # Blue circle on frame2
+
+    # Add match count info
+    cv2.putText(combined, f"Keypoints: V1={len(kp1)}, V2={len(kp2)}", (10, combined.shape[0] - 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    cv2.putText(combined, f"Good Matches: {len(good_matches)}", (10, combined.shape[0] - 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+    return combined, len(kp1), len(kp2), len(good_matches)
+
+
 def plot_alignment(matches, output_path):
     """
     Generates a plot of V1 Frame vs V2 Frame.
@@ -35,9 +303,21 @@ def plot_alignment(matches, output_path):
     plt.close()
     print(f"Saved alignment plot to {output_path}")
 
-def create_side_by_side_video(video1_path, video2_path, matches, output_path, max_frames=None):
+def create_side_by_side_video(video1_path, video2_path, matches, output_path, max_frames=None, algorithm="ORB", mode="simple"):
     """
     Creates a side-by-side video showing the aligned frames.
+
+    Args:
+        video1_path: Path to first video
+        video2_path: Path to second video
+        matches: List of match dictionaries with v1_frame and v2_frame keys
+        output_path: Path for output video
+        max_frames: Maximum number of frames to process (None for all)
+        algorithm: Algorithm name to use for feature detection ("ORB", "BRISK", "AKAZE")
+        mode: Visualization mode:
+              - "simple": Just side-by-side frames, no features
+              - "all_features": Show all detected keypoints on both frames
+              - "matched_only": Show only matched features with connection lines
     """
     cap1 = cv2.VideoCapture(video1_path)
     cap2 = cv2.VideoCapture(video2_path)
@@ -71,14 +351,14 @@ def create_side_by_side_video(video1_path, video2_path, matches, output_path, ma
     if max_frames:
         max_frame = min(max_frame, min_frame + max_frames)
 
-    print(f"Generating visualization video {output_path}...")
+    mode_names = {
+        "simple": "Frames Only",
+        "all_features": "All Features",
+        "matched_only": "Matched Features"
+    }
+    print(f"Generating visualization video ({mode_names.get(mode, mode)}): {output_path}...")
 
     current_v1_frame = 0
-
-    # We iterate through V1 frames.
-    # If we have a match, we seek V2 to that frame.
-    # If we don't have a specific match, we might interpolate or just hold the last one?
-    # For simplicity, let's only visualize the matched frames or linear interpolation.
 
     # Let's iterate linearly through the matched range
     cap1.set(cv2.CAP_PROP_POS_FRAMES, min_frame)
@@ -95,13 +375,7 @@ def create_side_by_side_video(video1_path, video2_path, matches, output_path, ma
         # Determine which V2 frame to show
         target_v2_frame = match_lookup.get(current_v1_frame)
 
-        # Simple hold-last-value interpolation if missing (or strictly follow matches?)
-        # Since we might have subsampled, let's just skip frames that aren't in the match list
-        # to make the video purely about the matches found.
         if target_v2_frame is None:
-            # If we want to show a continuous video, we should interpolate.
-            # But users might want to see EXACTLY what matched.
-            # Let's just continue reading V1 until we hit a match.
             current_v1_frame += 1
             continue
 
@@ -114,18 +388,31 @@ def create_side_by_side_video(video1_path, video2_path, matches, output_path, ma
         if not ret2:
             break # V2 ended
 
-        # Combine
-        # Resize if needed (assuming same size for now)
+        # Resize if needed
         if frame2.shape != frame1.shape:
              frame2 = cv2.resize(frame2, (width, height))
 
-        combined = np.hstack((frame1, frame2))
+        # Create combined frame based on mode
+        if mode == "all_features":
+            # Show ALL detected keypoints
+            combined, n_kp1, n_kp2 = draw_all_features(frame1, frame2, algorithm)
+        elif mode == "matched_only":
+            # Show ONLY matched features with lines
+            combined, n_matches = draw_matched_features_only(frame1, frame2, algorithm)
+        else:
+            # Simple mode - just frames
+            combined = draw_simple_side_by_side(frame1, frame2)
 
-        # Add text
+        # Add frame info text (common to all modes)
         cv2.putText(combined, f"V1 Frame: {current_v1_frame}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         cv2.putText(combined, f"V2 Frame: {target_v2_frame}", (width + 10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+        # Add mode and algorithm info for feature modes
+        if mode in ["all_features", "matched_only"]:
+            cv2.putText(combined, f"Algorithm: {algorithm.upper()}", (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
         out.write(combined)
 

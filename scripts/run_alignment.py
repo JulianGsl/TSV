@@ -59,12 +59,18 @@ def process_plan(plan_name):
     for algo in ALGORITHMS:
         print(f"\n--- Running {algo} ---")
 
-        # 1. Alignment
-        # Sample rate 30 (1 per second assuming 30fps) for speed
-        raw_results = align_videos(video1_path, video2_path, algo_name=algo, sample_rate=30, search_window=150)
+        # Create algorithm-specific folder
+        algo_dir = os.path.join(plan_dir, algo.lower())
+        os.makedirs(algo_dir, exist_ok=True)
 
-        # Save Raw
-        raw_csv_path = os.path.join(plan_dir, f"alignment_{algo.lower()}_raw.csv")
+        # 1. Alignment
+        # Sample rate 15 (process every 15th frame of video1)
+        # Search window 150, search_step 10 (test frames 0,10,20,... up to 150)
+        raw_results = align_videos(video1_path, video2_path, algo_name=algo,
+                                   sample_rate=15, search_window=150, search_step=10)
+
+        # Save Raw CSV
+        raw_csv_path = os.path.join(algo_dir, "alignment_raw.csv")
         save_results_to_csv(raw_csv_path, raw_results)
 
         if not raw_results:
@@ -75,25 +81,38 @@ def process_plan(plan_name):
         print("  > Post-processing (smoothing)...")
         clean_results = filter_outliers_and_smooth(raw_results)
 
-        # Save Clean
-        clean_csv_path = os.path.join(plan_dir, f"alignment_{algo.lower()}_clean.csv")
+        # Save Clean CSV
+        clean_csv_path = os.path.join(algo_dir, "alignment_clean.csv")
         save_results_to_csv(clean_csv_path, clean_results)
 
         # 3. Visualization
         print("  > Generating visualizations...")
 
         # Plot
-        plot_path = os.path.join(plan_dir, f"plot_{algo.lower()}.png")
+        plot_path = os.path.join(algo_dir, "plot.png")
         plot_alignment(clean_results, plot_path)
 
-        # Video (Optional - can be slow)
-        # We only generate a short clip or low FPS version?
-        # Let's generate it for the first 50 matches to demonstrate
-        video_out_path = os.path.join(plan_dir, f"comparison_{algo.lower()}.mp4")
-        create_side_by_side_video(video1_path, video2_path, clean_results, video_out_path, max_frames=500)
+        # Generate 3 types of videos
+        # Video 1: Simple side-by-side (frames only)
+        video_simple_path = os.path.join(algo_dir, "comparison_simple.mp4")
+        create_side_by_side_video(video1_path, video2_path, clean_results,
+                                  video_simple_path, max_frames=2700,
+                                  algorithm=algo, mode="simple")
+
+        # Video 2: All features detected
+        video_all_features_path = os.path.join(algo_dir, "comparison_all_features.mp4")
+        create_side_by_side_video(video1_path, video2_path, clean_results,
+                                  video_all_features_path, max_frames=2700,
+                                  algorithm=algo, mode="all_features")
+
+        # Video 3: Only matched features
+        video_matched_path = os.path.join(algo_dir, "comparison_matched_only.mp4")
+        create_side_by_side_video(video1_path, video2_path, clean_results,
+                                  video_matched_path, max_frames=2700,
+                                  algorithm=algo, mode="matched_only")
 
         # HTML Report
-        report_path = os.path.join(plan_dir, f"report_{algo.lower()}.html")
+        report_path = os.path.join(algo_dir, "report.html")
         stats = {
             "algorithm": algo,
             "avg_score": sum(r["score"] for r in raw_results) / len(raw_results) if raw_results else 0
