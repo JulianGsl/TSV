@@ -57,11 +57,7 @@ def filter_outliers_and_smooth(matches, window_size=5):
         # Use MAD-based threshold (more robust than std for outliers)
         # Tighten thresholds from 3*MAD to 2.5*MAD for better outlier rejection
         velocity_threshold_low = max(0.1, median_velocity - 2.5 * mad)
-        velocity_threshold_high = median_velocity + 2.5 * mad
-        
-        # Also set absolute bounds based on physical constraints
-        velocity_threshold_low = max(0.1, velocity_threshold_low)
-        velocity_threshold_high = min(3.0, velocity_threshold_high)
+        velocity_threshold_high = min(3.0, median_velocity + 2.5 * mad)
     else:
         # Fallback to simple thresholds for first match
         velocity_threshold_low = 0.1

@@ -308,7 +308,7 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                             if scale_x < 0.7 or scale_x > 1.3 or scale_y < 0.7 or scale_y > 1.3:
                                 # Suspicious transformation, reduce confidence
                                 inlier_count = int(inlier_count * 0.5)
-                        except:
+                        except (ValueError, ZeroDivisionError, IndexError):
                             # If decomposition fails, reduce confidence
                             inlier_count = int(inlier_count * 0.7)
 
