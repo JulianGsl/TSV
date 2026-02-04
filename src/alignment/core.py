@@ -294,7 +294,8 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                                             maxIters=2000,
                                             confidence=0.999)
                 if mask is not None:
-                    inlier_count = int(np.sum(mask))
+                    raw_inlier_count = int(np.sum(mask))
+                    inlier_count = raw_inlier_count
                     
                     # Additional quality check: verify homography is reasonable
                     # For rail track videos, we expect mostly translation with minimal rotation/scaling
@@ -311,24 +312,26 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                             rotation_deg = np.degrees(rotation_rad)
 
                             # For rail tracks, scale should be close to 1.0 and rotation small
-                            if scale_x < 0.7 or scale_x > 1.3 or scale_y < 0.7 or scale_y > 1.3:
-                                # Suspicious scale, reduce confidence
-                                inlier_count = int(inlier_count * 0.5)
+                            # Relaxed constraints to handle curves and speed differences better
+                            if scale_x < 0.6 or scale_x > 1.5 or scale_y < 0.6 or scale_y > 1.5:
+                                # Suspicious scale, reduce confidence slightly
+                                inlier_count = int(inlier_count * 0.8)
 
-                            if abs(rotation_deg) > 10.0:
-                                # Suspicious rotation (> 10 degrees), reduce confidence significantly
-                                inlier_count = int(inlier_count * 0.3)
+                            if abs(rotation_deg) > 20.0:
+                                # Suspicious rotation (> 20 degrees), reduce confidence
+                                # Relaxed from 10 deg to 20 deg to account for curved tracks
+                                inlier_count = int(inlier_count * 0.5)
 
                         except (ValueError, ZeroDivisionError, IndexError):
                             # If decomposition fails, reduce confidence
-                            inlier_count = int(inlier_count * 0.7)
+                            inlier_count = int(inlier_count * 0.8)
 
             weighted = inlier_count - penalty
 
             if weighted > best_weighted_score:
                 best_weighted_score = weighted
                 best_v2_idx = idx
-                best_match_raw_score = inlier_count # We return the raw score (inliers) for display
+                best_match_raw_score = raw_inlier_count # Store the true raw inlier count
 
         # Adaptive threshold based on match quality and velocity confidence
         # Higher velocity confidence = stricter threshold (more negative, harder to pass)
@@ -336,6 +339,7 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         acceptance_threshold = -100 - (velocity_confidence * 50)
         
         # Require at least 4 inliers to consider it a valid geometric match
+        # Use best_match_raw_score (unpenalized) for the hard gate
         if best_v2_idx != -1 and best_weighted_score > acceptance_threshold and best_match_raw_score >= 4:
             best_match_score = best_match_raw_score
 
