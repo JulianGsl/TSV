@@ -13,6 +13,9 @@ from .algorithms import orb
 from .algorithms import brisk
 from .algorithms import akaze
 
+# Constants for robust alignment
+SINGLE_MATCH_DISTANCE_THRESHOLD = 50  # Distance threshold for accepting single matches
+
 ALGORITHMS = {
     "ORB": orb,
     "BRISK": brisk,
@@ -426,8 +429,9 @@ def align_videos_robust(video1_path, video2_path, algo_name="ORB", sample_rate=1
             continue
         
         # Predict center of search based on velocity
+        # Velocity already accounts for sample_rate (dv2/dv1 where dv1 includes sample_rate)
         velocity = aligner.compute_velocity()
-        predicted_v2_frame = last_best_v2_frame + int(sample_rate * velocity)
+        predicted_v2_frame = last_best_v2_frame + int(velocity * sample_rate)
         
         # BIDIRECTIONAL search: both forward AND backward
         # This is critical to correct errors from previous frames
@@ -461,7 +465,7 @@ def align_videos_robust(video1_path, video2_path, algo_name="ORB", sample_rate=1
                             good_matches.append(m)
                     elif len(match_pair) == 1:
                         m = match_pair[0]
-                        if m.distance < 50:
+                        if m.distance < SINGLE_MATCH_DISTANCE_THRESHOLD:
                             good_matches.append(m)
                 
                 if len(good_matches) >= 8:

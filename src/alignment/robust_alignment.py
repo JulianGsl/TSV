@@ -6,6 +6,14 @@ Implements robust alignment with temporal continuity constraints and bidirection
 import numpy as np
 from collections import deque
 
+# Constants
+DEFAULT_MAX_VELOCITY = 5
+DEFAULT_CONF_THRESHOLD = 0.3
+DEFAULT_HISTORY_SIZE = 10
+SEARCH_RADIUS_MULTIPLIER = 10  # Multiplier for adaptive search radius
+SINGLE_MATCH_DISTANCE_THRESHOLD = 50  # Distance threshold for accepting single matches
+DISTANCE_PENALTY_FACTOR = 0.1  # Factor for exponential distance penalty
+
 
 class RobustAligner:
     """
@@ -18,7 +26,8 @@ class RobustAligner:
     - Bidirectional search window (forward AND backward) to correct past errors
     """
     
-    def __init__(self, max_velocity=5, conf_threshold=0.3, history_size=10):
+    def __init__(self, max_velocity=DEFAULT_MAX_VELOCITY, conf_threshold=DEFAULT_CONF_THRESHOLD, 
+                 history_size=DEFAULT_HISTORY_SIZE):
         """
         Initialize the RobustAligner.
         
@@ -97,7 +106,7 @@ class RobustAligner:
         """
         Compute weighted score combining raw score, confidence, and distance penalty.
         
-        Formula: weighted = raw_score * conf * exp(-0.1 * |distance|)
+        Formula: weighted = raw_score * conf * exp(-DISTANCE_PENALTY_FACTOR * |distance|)
         
         Args:
             raw_score (float): Raw match score (e.g., number of inliers)
@@ -108,7 +117,7 @@ class RobustAligner:
             float: Weighted score
         """
         # Exponential decay based on distance from prediction
-        distance_penalty = np.exp(-0.1 * abs(distance_from_prediction))
+        distance_penalty = np.exp(-DISTANCE_PENALTY_FACTOR * abs(distance_from_prediction))
         
         # Combine all factors
         weighted = raw_score * conf * distance_penalty
@@ -152,7 +161,7 @@ class RobustAligner:
         # BIDIRECTIONAL search window
         # Search both FORWARD and BACKWARD from prediction
         # This is critical to allow correcting errors from previous frames
-        search_radius = int(self.max_velocity * 10)  # Adaptive radius
+        search_radius = int(self.max_velocity * SEARCH_RADIUS_MULTIPLIER)  # Adaptive radius
         
         # Define bidirectional search range
         search_start = max(0, predicted_v2_frame - search_radius)
@@ -182,7 +191,7 @@ class RobustAligner:
                         good_matches.append(m)
                 elif len(match_pair) == 1:
                     m = match_pair[0]
-                    if m.distance < 50:
+                    if m.distance < SINGLE_MATCH_DISTANCE_THRESHOLD:
                         good_matches.append(m)
             
             if len(good_matches) >= 8:
