@@ -408,6 +408,7 @@ def align_videos_robust(video1_path, video2_path, algo_name="ORB", sample_rate=1
     
     results = []
     last_best_v2_frame = 0
+    last_matched_v1_frame = 0  # Track the last V1 frame that had a successful match
     
     # Loop through Video 1
     v1_frame_idx = 0
@@ -429,9 +430,10 @@ def align_videos_robust(video1_path, video2_path, algo_name="ORB", sample_rate=1
             continue
         
         # Predict center of search based on velocity
-        # Velocity already accounts for sample_rate (dv2/dv1 where dv1 includes sample_rate)
+        # Velocity is dv2/dv1 from history, so we need to account for frames elapsed since last match
         velocity = aligner.compute_velocity()
-        predicted_v2_frame = last_best_v2_frame + int(velocity * sample_rate)
+        frames_since_last_match = v1_frame_idx - last_matched_v1_frame
+        predicted_v2_frame = last_best_v2_frame + int(velocity * frames_since_last_match)
         
         # BIDIRECTIONAL search: both forward AND backward
         # This is critical to correct errors from previous frames
@@ -548,6 +550,7 @@ def align_videos_robust(video1_path, video2_path, algo_name="ORB", sample_rate=1
             })
             aligner.last_offset = best_match['v2_frame']
             last_best_v2_frame = best_match['v2_frame']
+            last_matched_v1_frame = v1_frame_idx  # Track this match
         
         v1_frame_idx += 1
     
