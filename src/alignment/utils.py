@@ -8,6 +8,7 @@ import numpy as np
 def filter_outliers_and_smooth(matches, window_size=5):
     """
     Filters outliers from the matches and smooths the path.
+    Uses robust statistical methods to detect and correct drift.
 
     Args:
         matches (list): List of dicts {'v1_frame', 'v2_frame', 'score'}
@@ -30,8 +31,8 @@ def filter_outliers_and_smooth(matches, window_size=5):
     if len(sorted_matches) > 0:
         filtered.append(sorted_matches[0])
 
-    # Calculate local velocities for outlier detection
-    velocities = []
+    # Calculate all pairwise velocities for robust baseline estimation
+    all_velocities = []
     for i in range(1, len(sorted_matches)):
         curr = sorted_matches[i]
         prev = sorted_matches[i-1]
@@ -39,14 +40,14 @@ def filter_outliers_and_smooth(matches, window_size=5):
         dv1 = curr['v1_frame'] - prev['v1_frame']
         dv2 = curr['v2_frame'] - prev['v2_frame']
         
-        if dv1 > 0:
+        if dv1 > 0 and dv2 >= 0:  # Only positive velocities
             velocity = dv2 / dv1
-            velocities.append(velocity)
+            all_velocities.append(velocity)
 
     # Calculate median and MAD (Median Absolute Deviation) for robust outlier detection
-    if len(velocities) >= 2:
-        median_velocity = np.median(velocities)
-        deviations = [abs(v - median_velocity) for v in velocities]
+    if len(all_velocities) >= 2:
+        median_velocity = np.median(all_velocities)
+        deviations = [abs(v - median_velocity) for v in all_velocities]
         mad = np.median(deviations)
         
         # Handle zero MAD case (all velocities identical) by using a small tolerance
@@ -54,12 +55,13 @@ def filter_outliers_and_smooth(matches, window_size=5):
             mad = 0.1  # Minimum tolerance to allow slight variations
         
         # Use MAD-based threshold (more robust than std for outliers)
-        velocity_threshold_low = max(0, median_velocity - 3 * mad)
-        velocity_threshold_high = median_velocity + 3 * mad
+        # Tighten thresholds from 3*MAD to 2.5*MAD for better outlier rejection
+        velocity_threshold_low = max(0.1, median_velocity - 2.5 * mad)
+        velocity_threshold_high = min(3.0, median_velocity + 2.5 * mad)
     else:
         # Fallback to simple thresholds for first match
-        velocity_threshold_low = 0
-        velocity_threshold_high = 5.0
+        velocity_threshold_low = 0.1
+        velocity_threshold_high = 3.0
 
     for i in range(1, len(sorted_matches)):
         curr = sorted_matches[i]
@@ -80,6 +82,41 @@ def filter_outliers_and_smooth(matches, window_size=5):
         else:
             # Outlier detected - skip it
             pass
+    
+    # Additional pass: detect and correct systematic drift
+    # Look for gradual velocity changes that might indicate accumulated error
+    if len(filtered) >= 10:
+        # Divide matches into segments and check for velocity drift
+        segment_size = len(filtered) // 3
+        if segment_size >= 3:
+            segments = [
+                filtered[0:segment_size],
+                filtered[segment_size:2*segment_size],
+                filtered[2*segment_size:]
+            ]
+            
+            segment_velocities = []
+            for segment in segments:
+                seg_vels = []
+                for i in range(1, len(segment)):
+                    dv1 = segment[i]['v1_frame'] - segment[i-1]['v1_frame']
+                    dv2 = segment[i]['v2_frame'] - segment[i-1]['v2_frame']
+                    if dv1 > 0:
+                        seg_vels.append(dv2 / dv1)
+                if seg_vels:
+                    segment_velocities.append(np.median(seg_vels))
+            
+            # If there's a consistent trend (drift), apply correction to later segments
+            if len(segment_velocities) == 3:
+                drift_trend = segment_velocities[-1] - segment_velocities[0]
+                # If drift is significant (>10% change), apply linear correction
+                if abs(drift_trend) > 0.1:
+                    target_velocity = segment_velocities[0]  # Use first segment as reference
+                    # Apply gradual correction to last segment
+                    correction_needed = drift_trend * segment_size
+                    for j, idx in enumerate(range(2*segment_size, len(filtered))):
+                        progress = j / segment_size if segment_size > 0 else 0
+                        filtered[idx]['v2_frame'] = int(filtered[idx]['v2_frame'] - progress * correction_needed)
 
     # 2. Interpolation for missing frames (optional, if gaps are small)
     # Fill small gaps (< 5 frames) with linear interpolation

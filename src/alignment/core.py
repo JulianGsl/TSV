@@ -78,6 +78,12 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
     # Can be < 1 if video2 is faster, > 1 if video2 is slower
     estimated_velocity = 1.0
     velocity_confidence = 0.0  # Confidence in velocity estimate (0-1)
+    
+    # Kalman filter state for velocity estimation
+    # state: [velocity, velocity_change_rate]
+    velocity_variance = 1.0  # Initial uncertainty in velocity estimate
+    process_noise = 0.01  # How much we expect velocity to change (Q)
+    measurement_noise = 0.1  # Uncertainty in velocity measurements (R)
 
     # Track consecutive failures to expand search
     consecutive_failures = 0
@@ -103,7 +109,7 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             continue
 
         # Dynamic Search Window with Velocity Prediction
-        # Update velocity estimate based on recent matches
+        # Update velocity estimate based on recent matches using Kalman filter
         if len(results) >= 2:
             # Calculate velocity from last few matches
             recent_window = min(5, len(results))
@@ -116,21 +122,45 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                     velocities.append(dv2 / dv1)
             
             if velocities:
-                # Use exponential moving average with recent velocity
-                # More reactive (0.5/0.5) at the start, more stable (0.8/0.2) once confident
-                new_velocity = np.mean(velocities)
-                alpha = 0.5 + 0.3 * velocity_confidence  # Ranges from 0.5 to 0.8
-                estimated_velocity = alpha * estimated_velocity + (1 - alpha) * new_velocity
-
-                # Update velocity confidence based on consistency
+                # Measure current velocity (average of recent observations)
+                measured_velocity = np.mean(velocities)
                 velocity_std = np.std(velocities) if len(velocities) > 1 else 0.5
-                # Use a more robust confidence calculation based on coefficient of variation
-                mean_velocity = np.mean(velocities)
-                if mean_velocity > 0:
-                    coeff_of_variation = velocity_std / mean_velocity
-                    velocity_confidence = max(0.0, min(1.0, 1.0 - coeff_of_variation))
-                else:
-                    velocity_confidence = 0.0
+                
+                # Kalman filter update
+                # Prediction step (we assume velocity stays constant)
+                predicted_variance = velocity_variance + process_noise
+                
+                # Update step: blend prediction with measurement
+                # Kalman gain: how much to trust the measurement vs prediction
+                kalman_gain = predicted_variance / (predicted_variance + measurement_noise + velocity_std**2)
+                
+                # Update velocity estimate
+                estimated_velocity = estimated_velocity + kalman_gain * (measured_velocity - estimated_velocity)
+                
+                # Update variance (uncertainty decreases with each measurement)
+                velocity_variance = (1 - kalman_gain) * predicted_variance
+                
+                # Clamp velocity to reasonable bounds to prevent runaway drift
+                # Trains typically have similar speeds (0.5x to 2.0x speed ratio)
+                estimated_velocity = max(0.5, min(2.0, estimated_velocity))
+                
+                # Update velocity confidence based on:
+                # 1. Low variance (high certainty in estimate)
+                # 2. Consistent measurements (low std)
+                # 3. Reasonable velocity range
+                variance_confidence = max(0.0, min(1.0, 1.0 - velocity_variance))
+                consistency_confidence = max(0.0, min(1.0, 1.0 - velocity_std))
+                velocity_confidence = 0.7 * variance_confidence + 0.3 * consistency_confidence
+                
+                # Periodic drift correction: reset if we detect systematic drift
+                # Check if recent velocities are consistently different from estimate
+                if len(velocities) >= 3:
+                    recent_bias = measured_velocity - estimated_velocity
+                    # If bias is significant and consistent, recalibrate
+                    if abs(recent_bias) > 0.2 and velocity_std < 0.1:
+                        # Strong evidence of systematic drift, reset with higher process noise
+                        velocity_variance = min(velocity_variance + 0.5, 1.0)
+                        process_noise = min(process_noise * 1.5, 0.1)  # Increase adaptability temporarily
 
         # Adaptive search window based on velocity confidence
         # Higher confidence = smaller window, faster processing
@@ -255,15 +285,32 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
                 # Improved RANSAC parameters:
-                # - ransacReprojThreshold: 3.0 (tighter than default 5.0)
-                # - maxIters: 1000 (balance between accuracy and performance)
-                # - confidence: 0.995 (higher confidence)
+                # - ransacReprojThreshold: 2.5 (tighter than before for rail tracks)
+                # - maxIters: 2000 (increased for better reliability)
+                # - confidence: 0.999 (very high confidence)
                 M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 
-                                            ransacReprojThreshold=3.0,
-                                            maxIters=1000,
-                                            confidence=0.995)
+                                            ransacReprojThreshold=2.5,
+                                            maxIters=2000,
+                                            confidence=0.999)
                 if mask is not None:
                     inlier_count = int(np.sum(mask))
+                    
+                    # Additional quality check: verify homography is reasonable
+                    # For rail track videos, we expect mostly translation with minimal rotation/scaling
+                    if M is not None and inlier_count > 0:
+                        # Check that transformation is not too extreme
+                        # Decompose to check if scale and rotation are reasonable
+                        try:
+                            # Extract scale from homography
+                            scale_x = np.sqrt(M[0,0]**2 + M[1,0]**2)
+                            scale_y = np.sqrt(M[0,1]**2 + M[1,1]**2)
+                            # For rail tracks, scale should be close to 1.0
+                            if scale_x < 0.7 or scale_x > 1.3 or scale_y < 0.7 or scale_y > 1.3:
+                                # Suspicious transformation, reduce confidence
+                                inlier_count = int(inlier_count * 0.5)
+                        except (ValueError, ZeroDivisionError, IndexError):
+                            # If decomposition fails, reduce confidence
+                            inlier_count = int(inlier_count * 0.7)
 
             weighted = inlier_count - penalty
 
