@@ -5,6 +5,7 @@ This module implements ORB (Oriented FAST and Rotated BRIEF) for image alignment
 
 import cv2
 import numpy as np
+from ..image_utils import preprocess_image
 
 
 def compute_features(image):
@@ -26,14 +27,11 @@ def compute_features(image):
     # nlevels: 8 pyramid levels for multi-scale detection
     orb = cv2.ORB_create(nfeatures=5000, scaleFactor=1.2, nlevels=8)
 
-    # Convert to grayscale if needed
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image
+    # Preprocess image (Grayscale + CLAHE)
+    processed_image = preprocess_image(image)
 
     # Detect keypoints and compute descriptors
-    keypoints, descriptors = orb.detectAndCompute(gray, None)
+    keypoints, descriptors = orb.detectAndCompute(processed_image, None)
 
     return keypoints, descriptors
 

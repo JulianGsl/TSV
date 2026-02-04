@@ -122,8 +122,8 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                     velocities.append(dv2 / dv1)
             
             if velocities:
-                # Measure current velocity (average of recent observations)
-                measured_velocity = np.mean(velocities)
+                # Measure current velocity (median for robustness against outliers)
+                measured_velocity = np.median(velocities)
                 velocity_std = np.std(velocities) if len(velocities) > 1 else 0.5
                 
                 # Kalman filter update
@@ -230,7 +230,8 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                             good_matches.append(m)
                 
                 # Filter by match count - use adaptive threshold based on detected features
-                min_matches = max(8, min(10, len(kp1) // 20))
+                # Lowered minimum threshold to 5 to accommodate sparse features (e.g. AKAZE)
+                min_matches = max(5, min(10, len(kp1) // 20))
                 if len(good_matches) >= min_matches:
                     raw_candidates.append({
                         "idx": current_search_idx,
@@ -304,10 +305,20 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                             # Extract scale from homography
                             scale_x = np.sqrt(M[0,0]**2 + M[1,0]**2)
                             scale_y = np.sqrt(M[0,1]**2 + M[1,1]**2)
-                            # For rail tracks, scale should be close to 1.0
+
+                            # Extract rotation roughly (assuming small rotation)
+                            rotation_rad = np.arctan2(M[1,0], M[0,0])
+                            rotation_deg = np.degrees(rotation_rad)
+
+                            # For rail tracks, scale should be close to 1.0 and rotation small
                             if scale_x < 0.7 or scale_x > 1.3 or scale_y < 0.7 or scale_y > 1.3:
-                                # Suspicious transformation, reduce confidence
+                                # Suspicious scale, reduce confidence
                                 inlier_count = int(inlier_count * 0.5)
+
+                            if abs(rotation_deg) > 10.0:
+                                # Suspicious rotation (> 10 degrees), reduce confidence significantly
+                                inlier_count = int(inlier_count * 0.3)
+
                         except (ValueError, ZeroDivisionError, IndexError):
                             # If decomposition fails, reduce confidence
                             inlier_count = int(inlier_count * 0.7)
@@ -324,7 +335,8 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         # Lower confidence = more lenient threshold (less negative, easier to pass)
         acceptance_threshold = -100 - (velocity_confidence * 50)
         
-        if best_v2_idx != -1 and best_weighted_score > acceptance_threshold:
+        # Require at least 4 inliers to consider it a valid geometric match
+        if best_v2_idx != -1 and best_weighted_score > acceptance_threshold and best_match_raw_score >= 4:
             best_match_score = best_match_raw_score
 
             print(f"V1 {v1_frame_idx} -> V2 {best_v2_idx} (Score: {best_match_score}, Weighted: {best_weighted_score:.1f}, Vel: {estimated_velocity:.2f}, Conf: {velocity_confidence:.2f})")

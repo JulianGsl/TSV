@@ -5,6 +5,7 @@ This module implements BRISK (Binary Robust Invariant Scalable Keypoints) for im
 
 import cv2
 import numpy as np
+from ..image_utils import preprocess_image
 
 
 def compute_features(image):
@@ -26,14 +27,11 @@ def compute_features(image):
     # patternScale: 1.0 for standard pattern size
     brisk = cv2.BRISK_create(thresh=30, octaves=4, patternScale=1.0)
 
-    # Convert to grayscale if needed
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image
+    # Preprocess image (Grayscale + CLAHE)
+    processed_image = preprocess_image(image)
 
     # Detect keypoints and compute descriptors
-    keypoints, descriptors = brisk.detectAndCompute(gray, None)
+    keypoints, descriptors = brisk.detectAndCompute(processed_image, None)
 
     return keypoints, descriptors
 

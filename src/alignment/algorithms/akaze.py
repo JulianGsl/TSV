@@ -5,6 +5,7 @@ This module implements AKAZE (Accelerated-KAZE) for image alignment.
 
 import cv2
 import numpy as np
+from ..image_utils import preprocess_image
 
 
 def compute_features(image):
@@ -23,21 +24,18 @@ def compute_features(image):
     # Initialize AKAZE detector with optimized parameters
     # descriptor_type: DESCRIPTOR_MLDB for better performance
     # descriptor_size: 0 (full size) for maximum precision
-    # threshold: 0.001 (default value, controls feature response threshold)
+    # threshold: Lowered to 0.0001 to detect more features in low-texture areas
     akaze = cv2.AKAZE_create(
         descriptor_type=cv2.AKAZE_DESCRIPTOR_MLDB,
         descriptor_size=0,
-        threshold=0.001
+        threshold=0.0001
     )
 
-    # Convert to grayscale if needed
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image
+    # Preprocess image (Grayscale + CLAHE)
+    processed_image = preprocess_image(image)
 
     # Detect keypoints and compute descriptors
-    keypoints, descriptors = akaze.detectAndCompute(gray, None)
+    keypoints, descriptors = akaze.detectAndCompute(processed_image, None)
 
     return keypoints, descriptors
 
