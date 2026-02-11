@@ -29,10 +29,9 @@ CORRECT_MATCH_IDX = 30       # The correct corresponding frame in Video 2
 DISTRACTOR_OFFSETS = [-50, -20, -10, -5, -2, -1, 1, 2, 5, 10, 20, 50]
 
 # Scoring Parameters (from src/alignment/core.py)
-# We assume a moderate velocity confidence for the benchmark to apply a standard penalty
-VELOCITY_CONFIDENCE = 0.5
+# We remove velocity calculation since we are testing discrete frames
 BASE_PENALTY = 1.0
-PENALTY_FACTOR = BASE_PENALTY * (0.5 + VELOCITY_CONFIDENCE)
+PENALTY_FACTOR = BASE_PENALTY * 1.0 # Fixed penalty, no velocity confidence
 
 # Algorithms to test
 ALGORITHMS = {
@@ -63,8 +62,10 @@ def get_frame(video_path, frame_idx):
 
 def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_idx, v2_idx, rank, is_correct, weighted_score):
     """Generates and saves a side-by-side comparison image with colored matches."""
-    if not os.path.exists(BENCHMARK_OUTPUT_DIR):
-        os.makedirs(BENCHMARK_OUTPUT_DIR)
+    # Create algorithm-specific subdirectory
+    algo_dir = os.path.join(BENCHMARK_OUTPUT_DIR, algo_name)
+    if not os.path.exists(algo_dir):
+        os.makedirs(algo_dir)
 
     # 1. Color Code Matches based on Distance (Green/Yellow/Orange)
     # This logic replicates src/alignment/visualization.py
@@ -125,7 +126,7 @@ def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_i
 
     # Save
     filename = f"{algo_name}_rank{rank:02d}_{status}_v2-{v2_idx}.jpg"
-    filepath = os.path.join(BENCHMARK_OUTPUT_DIR, filename)
+    filepath = os.path.join(algo_dir, filename)
     cv2.imwrite(filepath, combined)
 
 def evaluate_match(algo_module, img1, img2, v2_idx, expected_pos):
@@ -249,8 +250,11 @@ def main():
 
     # Clean output dir
     if os.path.exists(BENCHMARK_OUTPUT_DIR):
-        for f in os.listdir(BENCHMARK_OUTPUT_DIR):
-            os.remove(os.path.join(BENCHMARK_OUTPUT_DIR, f))
+        # We don't wipe the whole dir anymore since we create subdirs
+        # Just ensure it exists
+        pass
+    else:
+        os.makedirs(BENCHMARK_OUTPUT_DIR)
 
     for algo_name, algo_module in ALGORITHMS.items():
         print(f"\n--- Testing Algorithm: {algo_name} ---")
@@ -308,7 +312,7 @@ def main():
         else:
             print(f"\n  [FAILURE] {algo_name} ranked correct match #{correct_found_at_rank}.")
 
-    print(f"\nVisualizations saved to {BENCHMARK_OUTPUT_DIR}/")
+    print(f"\nVisualizations saved to {BENCHMARK_OUTPUT_DIR}/<Algorithm>/")
 
 if __name__ == "__main__":
     main()
