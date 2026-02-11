@@ -29,9 +29,10 @@ CORRECT_MATCH_IDX = 30       # The correct corresponding frame in Video 2
 DISTRACTOR_OFFSETS = [-50, -20, -10, -5, -2, -1, 1, 2, 5, 10, 20, 50]
 
 # Scoring Parameters (from src/alignment/core.py)
-# We remove velocity calculation since we are testing discrete frames
+# We disable the distance penalty for benchmarking to test pure visual discrimination.
+# If an algorithm ranks a distractor higher than the correct frame, it has failed visually.
 BASE_PENALTY = 1.0
-PENALTY_FACTOR = BASE_PENALTY * 1.0 # Fixed penalty, no velocity confidence
+PENALTY_FACTOR = 0.0 # Disabled penalty (was BASE_PENALTY * 1.0)
 
 # Algorithms to test
 ALGORITHMS = {
