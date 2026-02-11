@@ -125,6 +125,10 @@ def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_i
     cv2.putText(combined, text1, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2, cv2.LINE_AA)
     cv2.putText(combined, text2, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
 
+    # Frame labels on images
+    cv2.putText(combined, f"Frame {v1_idx}", (10, h1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    cv2.putText(combined, f"Frame {v2_idx}", (w1 + 10, h1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
     # Save
     filename = f"{algo_name}_rank{rank:02d}_{status}_v2-{v2_idx}.jpg"
     filepath = os.path.join(algo_dir, filename)
