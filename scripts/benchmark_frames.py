@@ -70,7 +70,6 @@ def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_i
     # 1. Color Code Matches based on Distance (Green/Yellow/Orange)
     # This logic replicates src/alignment/visualization.py
 
-    # Create a colored image for visualization
     h1, w1 = img1.shape[:2]
     h2, w2 = img2.shape[:2]
 
@@ -80,12 +79,8 @@ def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_i
     else:
         img2_resized = img2
 
-    # Draw keypoints
-    img1_kp = cv2.drawKeypoints(img1, kp1, None, color=(0, 255, 0), flags=0)
-    img2_kp = cv2.drawKeypoints(img2_resized, kp2, None, color=(0, 255, 0), flags=0)
-
-    # Combine images side-by-side
-    combined = np.hstack((img1_kp, img2_kp))
+    # Do NOT draw all keypoints. Start with raw images.
+    combined = np.hstack((img1, img2_resized))
 
     # Draw matches
     if good_matches and mask is not None:
