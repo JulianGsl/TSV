@@ -26,8 +26,13 @@ REFERENCE_FRAME_IDX = 30     # The frame in Video 1 we want to match
 CORRECT_MATCH_IDX = 30       # The correct corresponding frame in Video 2
 
 # Distractor offsets: Frames relative to CORRECT_MATCH_IDX to test against
-# We want to see if the algorithm scores the correct frame (offset 0) higher than these.
 DISTRACTOR_OFFSETS = [-50, -20, -10, -5, -2, -1, 1, 2, 5, 10, 20, 50]
+
+# Scoring Parameters (from src/alignment/core.py)
+# We assume a moderate velocity confidence for the benchmark to apply a standard penalty
+VELOCITY_CONFIDENCE = 0.5
+BASE_PENALTY = 1.0
+PENALTY_FACTOR = BASE_PENALTY * (0.5 + VELOCITY_CONFIDENCE)
 
 # Algorithms to test
 ALGORITHMS = {
@@ -56,40 +61,77 @@ def get_frame(video_path, frame_idx):
         return None
     return frame
 
-def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_idx, v2_idx, rank, is_correct):
-    """Generates and saves a side-by-side comparison image with matches."""
+def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_idx, v2_idx, rank, is_correct, weighted_score):
+    """Generates and saves a side-by-side comparison image with colored matches."""
     if not os.path.exists(BENCHMARK_OUTPUT_DIR):
         os.makedirs(BENCHMARK_OUTPUT_DIR)
 
-    # Prepare mask for drawing (convert RANSAC mask to list of matches)
-    matches_mask = None
-    if mask is not None:
-        matches_mask = mask.ravel().tolist()
+    # 1. Color Code Matches based on Distance (Green/Yellow/Orange)
+    # This logic replicates src/alignment/visualization.py
 
-    draw_params = dict(matchColor=(0, 255, 0), # Green for matches
-                       singlePointColor=None,
-                       matchesMask=matches_mask, # Draw only inliers
-                       flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+    # Create a colored image for visualization
+    h1, w1 = img1.shape[:2]
+    h2, w2 = img2.shape[:2]
+
+    # Resize img2 if needed
+    if h1 != h2 or w1 != w2:
+        img2_resized = cv2.resize(img2, (w1, h1))
+    else:
+        img2_resized = img2
+
+    # Draw keypoints
+    img1_kp = cv2.drawKeypoints(img1, kp1, None, color=(0, 255, 0), flags=0)
+    img2_kp = cv2.drawKeypoints(img2_resized, kp2, None, color=(0, 255, 0), flags=0)
+
+    # Combine images side-by-side
+    combined = np.hstack((img1_kp, img2_kp))
 
     # Draw matches
-    result_img = cv2.drawMatches(img1, kp1, img2, kp2, good_matches, None, **draw_params)
+    if good_matches and mask is not None:
+        mask_list = mask.ravel().tolist()
+
+        # Sort matches for better visualization (draw best on top if needed, but here just iterating)
+        # Only draw inliers
+        for i, match in enumerate(good_matches):
+            if i < len(mask_list) and mask_list[i] == 1:
+                pt1 = tuple(map(int, kp1[match.queryIdx].pt))
+                pt2 = tuple(map(int, kp2[match.trainIdx].pt))
+                pt2_offset = (pt2[0] + w1, pt2[1]) # Offset for 2nd image
+
+                # Color Logic from visualization.py
+                if match.distance < 30:
+                    color = (0, 255, 0)      # Green - Excellent
+                elif match.distance < 50:
+                    color = (0, 255, 255)    # Yellow - Good
+                else:
+                    color = (0, 165, 255)    # Orange - Moderate
+
+                # Draw line and points
+                cv2.line(combined, pt1, pt2_offset, color, 1, cv2.LINE_AA)
+                cv2.circle(combined, pt1, 3, color, -1)
+                cv2.circle(combined, pt2_offset, 3, color, -1)
 
     # Add text label
     status = "CORRECT" if is_correct else "DISTRACTOR"
-    color = (0, 255, 0) if is_correct else (0, 0, 255)
+    status_color = (0, 255, 0) if is_correct else (0, 0, 255)
 
-    text = f"{algo_name}: V1[{v1_idx}] - V2[{v2_idx}] | Rank: {rank} | Inliers: {np.sum(mask) if mask is not None else 0} | {status}"
-    cv2.putText(result_img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+    inliers = np.sum(mask) if mask is not None else 0
+
+    text1 = f"{algo_name} | Rank: {rank} | {status}"
+    text2 = f"Inliers: {inliers} | Weighted Score: {weighted_score:.1f}"
+
+    cv2.putText(combined, text1, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2, cv2.LINE_AA)
+    cv2.putText(combined, text2, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
 
     # Save
     filename = f"{algo_name}_rank{rank:02d}_{status}_v2-{v2_idx}.jpg"
     filepath = os.path.join(BENCHMARK_OUTPUT_DIR, filename)
-    cv2.imwrite(filepath, result_img)
+    cv2.imwrite(filepath, combined)
 
-def evaluate_match(algo_module, img1, img2):
+def evaluate_match(algo_module, img1, img2, v2_idx, expected_pos):
     """
     Computes matching score between two images using the specified algorithm.
-    Returns a dictionary with metrics and data for visualization.
+    Includes Homography Scale Penalty and Distance Penalty logic from core.py.
     """
     # 1. Compute Features
     kp1, des1 = algo_module.compute_features(img1)
@@ -100,7 +142,7 @@ def evaluate_match(algo_module, img1, img2):
         "kp2": len(kp2),
         "matches": 0,
         "inliers": 0,
-        "score": 0.0,
+        "weighted_score": -float('inf'),
         "good_matches": [],
         "mask": None,
         "keypoints": (kp1, kp2)
@@ -147,30 +189,29 @@ def evaluate_match(algo_module, img1, img2):
             inlier_count = int(np.sum(mask_arr))
             mask = mask_arr
 
-            # Additional quality check: verify homography is reasonable (same as in core.py)
-            # For rail track videos, we expect mostly translation with minimal rotation/scaling
+            # --- HOMOGRAPHY SCALE PENALTY (from core.py) ---
             if M is not None and inlier_count > 0:
-                # Check that transformation is not too extreme
-                # Decompose to check if scale and rotation are reasonable
                 try:
-                    # Extract scale from homography
                     scale_x = np.sqrt(M[0,0]**2 + M[1,0]**2)
                     scale_y = np.sqrt(M[0,1]**2 + M[1,1]**2)
-                    # For rail tracks, scale should be close to 1.0
                     if scale_x < 0.7 or scale_x > 1.3 or scale_y < 0.7 or scale_y > 1.3:
-                        # Suspicious transformation, reduce confidence
                         print(f"  [Penalty] Suspicious Scale: x={scale_x:.2f}, y={scale_y:.2f}")
                         inlier_count = int(inlier_count * 0.5)
                 except (ValueError, ZeroDivisionError, IndexError):
-                    # If decomposition fails, reduce confidence
                     inlier_count = int(inlier_count * 0.7)
+
+    # --- DISTANCE PENALTY (from core.py) ---
+    # weighted = inlier_count - penalty
+    dist = abs(v2_idx - expected_pos)
+    penalty = dist * PENALTY_FACTOR
+    weighted_score = inlier_count - penalty
 
     return {
         "kp1": len(kp1),
         "kp2": len(kp2),
         "matches": match_count,
-        "inliers": inlier_count,
-        "score": inlier_count,
+        "inliers": inlier_count, # This is the penalized inlier count
+        "weighted_score": weighted_score,
         "good_matches": good_matches,
         "mask": mask,
         "keypoints": (kp1, kp2)
@@ -181,32 +222,29 @@ def evaluate_match(algo_module, img1, img2):
 # =============================================================================
 
 def main():
-    print(f"Benchmark Script: Discrimination Ranking")
+    print(f"Benchmark Script: Discrimination Ranking (Exact Scoring)")
     print(f"Video 1: {VIDEO1_PATH}")
     print(f"Video 2: {VIDEO2_PATH}")
-    print(f"Output:  {BENCHMARK_OUTPUT_DIR}")
     print(f"Reference Frame (V1): {REFERENCE_FRAME_IDX}")
-    print(f"Correct Match (V2):   {CORRECT_MATCH_IDX}")
+    print(f"Expected Match (V2):  {CORRECT_MATCH_IDX}")
+    print(f"Penalty Factor:       {PENALTY_FACTOR:.2f}")
     print("=" * 60)
 
     if not os.path.exists(VIDEO1_PATH) or not os.path.exists(VIDEO2_PATH):
         print("Error: Videos not found.")
         return
 
-    # Load Reference Frame
     ref_img = get_frame(VIDEO1_PATH, REFERENCE_FRAME_IDX)
     if ref_img is None:
         print("Error: Could not load reference frame.")
         return
 
-    # Build list of candidate frames (Correct + Distractors)
+    # Build candidates
     candidates = []
-    # Add correct match
     candidates.append({"offset": 0, "idx": CORRECT_MATCH_IDX, "type": "CORRECT"})
-    # Add distractors
     for offset in DISTRACTOR_OFFSETS:
         idx = CORRECT_MATCH_IDX + offset
-        if idx >= 0: # Ensure valid frame index
+        if idx >= 0:
             candidates.append({"offset": offset, "idx": idx, "type": "DISTRACTOR"})
 
     # Clean output dir
@@ -214,7 +252,6 @@ def main():
         for f in os.listdir(BENCHMARK_OUTPUT_DIR):
             os.remove(os.path.join(BENCHMARK_OUTPUT_DIR, f))
 
-    # Run each algorithm
     for algo_name, algo_module in ALGORITHMS.items():
         print(f"\n--- Testing Algorithm: {algo_name} ---")
 
@@ -227,40 +264,36 @@ def main():
             if cand_img is None:
                 continue
 
-            res = evaluate_match(algo_module, ref_img, cand_img)
+            # Pass v2_idx and expected_pos for weighted score calculation
+            res = evaluate_match(algo_module, ref_img, cand_img, v2_idx, CORRECT_MATCH_IDX)
 
-            # Store full result
             cand_result = {
                 "v2_idx": v2_idx,
                 "type": cand["type"],
-                "offset": cand["offset"],
                 "inliers": res["inliers"],
+                "weighted_score": res["weighted_score"],
                 "data": res,
                 "img": cand_img
             }
             algo_results.append(cand_result)
-            print(f"  > V2[{v2_idx:<3}] ({cand['type']:<10}): {res['inliers']} inliers")
+            print(f"  > V2[{v2_idx:<3}] ({cand['type']:<10}): Inliers={res['inliers']}, Weighted={res['weighted_score']:.1f}")
 
-        # Sort results by score (descending)
-        algo_results.sort(key=lambda x: x["inliers"], reverse=True)
+        # Sort results by Weighted Score (descending)
+        algo_results.sort(key=lambda x: x["weighted_score"], reverse=True)
 
         print(f"\n  Ranking for {algo_name}:")
-        print(f"  {'Rank':<5} | {'Frame':<5} | {'Type':<10} | {'Score':<5} | {'Delta Score'}")
-        print("  " + "-" * 50)
-
-        # Calculate score difference from top match
-        top_score = algo_results[0]["inliers"] if algo_results else 0
+        print(f"  {'Rank':<5} | {'Frame':<5} | {'Type':<10} | {'Inliers':<7} | {'Weighted':<8}")
+        print("  " + "-" * 60)
 
         correct_found_at_rank = -1
 
         for rank, res in enumerate(algo_results, 1):
-            delta = res["inliers"] - top_score
-            print(f"  {rank:<5} | {res['v2_idx']:<5} | {res['type']:<10} | {res['inliers']:<5} | {delta}")
+            print(f"  {rank:<5} | {res['v2_idx']:<5} | {res['type']:<10} | {res['inliers']:<7} | {res['weighted_score']:<8.1f}")
 
             if res["type"] == "CORRECT":
                 correct_found_at_rank = rank
 
-            # Visualize Top 3 and the Correct one (if not in top 3)
+            # Visualize Top 3 and Correct one
             should_visualize = (rank <= 3) or (res["type"] == "CORRECT")
 
             if should_visualize and res["inliers"] > 0:
@@ -268,12 +301,12 @@ def main():
                 save_visualization(ref_img, kp1, res["img"], kp2,
                                    res["data"]["good_matches"], res["data"]["mask"],
                                    algo_name, REFERENCE_FRAME_IDX, res["v2_idx"],
-                                   rank, res["type"] == "CORRECT")
+                                   rank, res["type"] == "CORRECT", res["weighted_score"])
 
         if correct_found_at_rank == 1:
-            print(f"\n  [SUCCESS] {algo_name} correctly identified the true match as Rank 1.")
+            print(f"\n  [SUCCESS] {algo_name} ranked correct match #1.")
         else:
-            print(f"\n  [FAILURE] {algo_name} ranked true match at {correct_found_at_rank}.")
+            print(f"\n  [FAILURE] {algo_name} ranked correct match #{correct_found_at_rank}.")
 
     print(f"\nVisualizations saved to {BENCHMARK_OUTPUT_DIR}/")
 
