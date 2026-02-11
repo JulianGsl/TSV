@@ -19,14 +19,15 @@ VIDEO2_PATH = "./data/PlanTest/video2.mp4"
 # Output directory for visualizations
 BENCHMARK_OUTPUT_DIR = "./benchmark_results"
 
-# Manual Test Cases
-# Format: (frame_video1, frame_video2, description)
-TEST_CASES = [
-    (10, 10, "Same frame index (should match if synced)"),
-    (30, 30, "Frame 30 vs Frame 30"),
-    (30, 45, "Frame 30 vs Frame 45 (Simulating offset)"),
-    (30, 100, "Large offset (Expected no match)")
-]
+# --- Ranking Benchmark Configuration ---
+# Focus on testing one frame from Video 1 against multiple candidates in Video 2
+
+REFERENCE_FRAME_IDX = 30     # The frame in Video 1 we want to match
+CORRECT_MATCH_IDX = 30       # The correct corresponding frame in Video 2
+
+# Distractor offsets: Frames relative to CORRECT_MATCH_IDX to test against
+# We want to see if the algorithm scores the correct frame (offset 0) higher than these.
+DISTRACTOR_OFFSETS = [-50, -20, -10, -5, -2, -1, 1, 2, 5, 10, 20, 50]
 
 # Algorithms to test
 ALGORITHMS = {
@@ -55,7 +56,7 @@ def get_frame(video_path, frame_idx):
         return None
     return frame
 
-def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_idx, v2_idx):
+def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_idx, v2_idx, rank, is_correct):
     """Generates and saves a side-by-side comparison image with matches."""
     if not os.path.exists(BENCHMARK_OUTPUT_DIR):
         os.makedirs(BENCHMARK_OUTPUT_DIR)
@@ -74,16 +75,18 @@ def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_i
     result_img = cv2.drawMatches(img1, kp1, img2, kp2, good_matches, None, **draw_params)
 
     # Add text label
-    text = f"{algo_name}: V1[{v1_idx}] - V2[{v2_idx}] | Inliers: {np.sum(mask) if mask is not None else 0}"
-    cv2.putText(result_img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
+    status = "CORRECT" if is_correct else "DISTRACTOR"
+    color = (0, 255, 0) if is_correct else (0, 0, 255)
+
+    text = f"{algo_name}: V1[{v1_idx}] - V2[{v2_idx}] | Rank: {rank} | Inliers: {np.sum(mask) if mask is not None else 0} | {status}"
+    cv2.putText(result_img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
 
     # Save
-    filename = f"case_v1-{v1_idx}_v2-{v2_idx}_{algo_name}.jpg"
+    filename = f"{algo_name}_rank{rank:02d}_{status}_v2-{v2_idx}.jpg"
     filepath = os.path.join(BENCHMARK_OUTPUT_DIR, filename)
     cv2.imwrite(filepath, result_img)
-    # print(f"Saved visualization to {filepath}")
 
-def evaluate_match(algo_name, algo_module, img1, img2):
+def evaluate_match(algo_module, img1, img2):
     """
     Computes matching score between two images using the specified algorithm.
     Returns a dictionary with metrics and data for visualization.
@@ -160,54 +163,99 @@ def evaluate_match(algo_name, algo_module, img1, img2):
 # =============================================================================
 
 def main():
-    print(f"Benchmark Script for Video Alignment Algorithms")
+    print(f"Benchmark Script: Discrimination Ranking")
     print(f"Video 1: {VIDEO1_PATH}")
     print(f"Video 2: {VIDEO2_PATH}")
     print(f"Output:  {BENCHMARK_OUTPUT_DIR}")
+    print(f"Reference Frame (V1): {REFERENCE_FRAME_IDX}")
+    print(f"Correct Match (V2):   {CORRECT_MATCH_IDX}")
     print("=" * 60)
 
-    # Validate videos exist
     if not os.path.exists(VIDEO1_PATH) or not os.path.exists(VIDEO2_PATH):
-        print("Error: One or both video files not found.")
-        print("Please check paths or run scripts/generate_test_data.py")
+        print("Error: Videos not found.")
         return
 
-    print(f"{'Case':<40} | {'Algo':<8} | {'KP1':<5} | {'KP2':<5} | {'Match':<5} | {'Inliers':<7}")
-    print("-" * 85)
+    # Load Reference Frame
+    ref_img = get_frame(VIDEO1_PATH, REFERENCE_FRAME_IDX)
+    if ref_img is None:
+        print("Error: Could not load reference frame.")
+        return
 
-    for v1_idx, v2_idx, description in TEST_CASES:
-        print(f"\nTest Case: V1[{v1_idx}] vs V2[{v2_idx}] - {description}")
+    # Build list of candidate frames (Correct + Distractors)
+    candidates = []
+    # Add correct match
+    candidates.append({"offset": 0, "idx": CORRECT_MATCH_IDX, "type": "CORRECT"})
+    # Add distractors
+    for offset in DISTRACTOR_OFFSETS:
+        idx = CORRECT_MATCH_IDX + offset
+        if idx >= 0: # Ensure valid frame index
+            candidates.append({"offset": offset, "idx": idx, "type": "DISTRACTOR"})
 
-        img1 = get_frame(VIDEO1_PATH, v1_idx)
-        img2 = get_frame(VIDEO2_PATH, v2_idx)
+    # Clean output dir
+    if os.path.exists(BENCHMARK_OUTPUT_DIR):
+        for f in os.listdir(BENCHMARK_OUTPUT_DIR):
+            os.remove(os.path.join(BENCHMARK_OUTPUT_DIR, f))
 
-        if img1 is None or img2 is None:
-            continue
+    # Run each algorithm
+    for algo_name, algo_module in ALGORITHMS.items():
+        print(f"\n--- Testing Algorithm: {algo_name} ---")
 
-        best_algo = None
-        best_score = -1
+        algo_results = []
 
-        for algo_name, algo_module in ALGORITHMS.items():
-            result = evaluate_match(algo_name, algo_module, img1, img2)
+        for cand in candidates:
+            v2_idx = cand["idx"]
+            cand_img = get_frame(VIDEO2_PATH, v2_idx)
 
-            print(f"{'':<40} | {algo_name:<8} | {result['kp1']:<5} | {result['kp2']:<5} | {result['matches']:<5} | {result['inliers']:<7}")
+            if cand_img is None:
+                continue
 
-            # Generate visualization if matches found
-            if result['inliers'] > 0:
-                kp1, kp2 = result['keypoints']
-                save_visualization(img1, kp1, img2, kp2,
-                                   result['good_matches'], result['mask'],
-                                   algo_name, v1_idx, v2_idx)
+            res = evaluate_match(algo_module, ref_img, cand_img)
 
-            if result['inliers'] > best_score:
-                best_score = result['inliers']
-                best_algo = algo_name
+            # Store full result
+            cand_result = {
+                "v2_idx": v2_idx,
+                "type": cand["type"],
+                "offset": cand["offset"],
+                "inliers": res["inliers"],
+                "data": res,
+                "img": cand_img
+            }
+            algo_results.append(cand_result)
+            print(f"  > V2[{v2_idx:<3}] ({cand['type']:<10}): {res['inliers']} inliers")
 
-        print("-" * 85)
-        if best_score > 10:
-            print(f"Winner: {best_algo} with {best_score} inliers.")
+        # Sort results by score (descending)
+        algo_results.sort(key=lambda x: x["inliers"], reverse=True)
+
+        print(f"\n  Ranking for {algo_name}:")
+        print(f"  {'Rank':<5} | {'Frame':<5} | {'Type':<10} | {'Score':<5} | {'Delta Score'}")
+        print("  " + "-" * 50)
+
+        # Calculate score difference from top match
+        top_score = algo_results[0]["inliers"] if algo_results else 0
+
+        correct_found_at_rank = -1
+
+        for rank, res in enumerate(algo_results, 1):
+            delta = res["inliers"] - top_score
+            print(f"  {rank:<5} | {res['v2_idx']:<5} | {res['type']:<10} | {res['inliers']:<5} | {delta}")
+
+            if res["type"] == "CORRECT":
+                correct_found_at_rank = rank
+
+            # Visualize Top 3 and the Correct one (if not in top 3)
+            should_visualize = (rank <= 3) or (res["type"] == "CORRECT")
+
+            if should_visualize and res["inliers"] > 0:
+                kp1, kp2 = res["data"]["keypoints"]
+                save_visualization(ref_img, kp1, res["img"], kp2,
+                                   res["data"]["good_matches"], res["data"]["mask"],
+                                   algo_name, REFERENCE_FRAME_IDX, res["v2_idx"],
+                                   rank, res["type"] == "CORRECT")
+
+        if correct_found_at_rank == 1:
+            print(f"\n  [SUCCESS] {algo_name} correctly identified the true match as Rank 1.")
         else:
-            print("Result: No significant match found.")
+            print(f"\n  [FAILURE] {algo_name} ranked true match at {correct_found_at_rank}.")
 
     print(f"\nVisualizations saved to {BENCHMARK_OUTPUT_DIR}/")
 
