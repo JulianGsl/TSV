@@ -147,6 +147,24 @@ def evaluate_match(algo_module, img1, img2):
             inlier_count = int(np.sum(mask_arr))
             mask = mask_arr
 
+            # Additional quality check: verify homography is reasonable (same as in core.py)
+            # For rail track videos, we expect mostly translation with minimal rotation/scaling
+            if M is not None and inlier_count > 0:
+                # Check that transformation is not too extreme
+                # Decompose to check if scale and rotation are reasonable
+                try:
+                    # Extract scale from homography
+                    scale_x = np.sqrt(M[0,0]**2 + M[1,0]**2)
+                    scale_y = np.sqrt(M[0,1]**2 + M[1,1]**2)
+                    # For rail tracks, scale should be close to 1.0
+                    if scale_x < 0.7 or scale_x > 1.3 or scale_y < 0.7 or scale_y > 1.3:
+                        # Suspicious transformation, reduce confidence
+                        print(f"  [Penalty] Suspicious Scale: x={scale_x:.2f}, y={scale_y:.2f}")
+                        inlier_count = int(inlier_count * 0.5)
+                except (ValueError, ZeroDivisionError, IndexError):
+                    # If decomposition fails, reduce confidence
+                    inlier_count = int(inlier_count * 0.7)
+
     return {
         "kp1": len(kp1),
         "kp2": len(kp2),
