@@ -143,6 +143,9 @@ def evaluate_match(algo_module, img1, img2, v2_idx, expected_pos):
 # =============================================================================
 
 def main():
+    # Set random seed for reproducibility across runs and algorithms
+    random.seed(42)
+
     print(f"Benchmark Script: Discrimination Ranking (Exact Scoring)")
     print(f"Video 1: {VIDEO1_PATH}")
     print(f"Video 2: {VIDEO2_PATH}")
