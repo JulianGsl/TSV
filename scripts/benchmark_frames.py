@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import sys
 import os
+import random
 
 # Ensure src can be imported
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
@@ -25,8 +26,12 @@ BENCHMARK_OUTPUT_DIR = "./benchmark_results"
 REFERENCE_FRAME_IDX = 30     # The frame in Video 1 we want to match
 CORRECT_MATCH_IDX = 30       # The correct corresponding frame in Video 2
 
-# Distractor offsets: Frames relative to CORRECT_MATCH_IDX to test against
-DISTRACTOR_OFFSETS = [-50, -20, -10, -5, -2, -1, 1, 2, 5, 10, 20, 50]
+# Distractor Configuration
+# We will generate random distractors for each run
+NUM_CLOSE_DISTRACTORS = 5   # Number of frames close to the correct match
+CLOSE_RANGE = 10            # +/- frames for close distractors (e.g., +/- 10)
+NUM_FAR_DISTRACTORS = 5     # Number of frames far from the correct match
+FAR_RANGE = 100             # +/- frames for far distractors (e.g., +/- 100)
 
 # Scoring Parameters (from src/alignment/core.py)
 # We disable the distance penalty for benchmarking to test pure visual discrimination.
@@ -238,11 +243,36 @@ def main():
 
     # Build candidates
     candidates = []
+    # 1. Add Correct Match
     candidates.append({"offset": 0, "idx": CORRECT_MATCH_IDX, "type": "CORRECT"})
-    for offset in DISTRACTOR_OFFSETS:
-        idx = CORRECT_MATCH_IDX + offset
-        if idx >= 0:
-            candidates.append({"offset": offset, "idx": idx, "type": "DISTRACTOR"})
+
+    # 2. Add Random Close Distractors
+    used_offsets = {0}
+    for _ in range(NUM_CLOSE_DISTRACTORS):
+        while True:
+            offset = random.randint(-CLOSE_RANGE, CLOSE_RANGE)
+            if offset not in used_offsets:
+                used_offsets.add(offset)
+                idx = CORRECT_MATCH_IDX + offset
+                if idx >= 0:
+                    candidates.append({"offset": offset, "idx": idx, "type": "DISTRACTOR (Close)"})
+                break
+
+    # 3. Add Random Far Distractors
+    for _ in range(NUM_FAR_DISTRACTORS):
+        while True:
+            # Generate offset in [-FAR_RANGE, -CLOSE_RANGE] U [CLOSE_RANGE, FAR_RANGE]
+            if random.random() < 0.5:
+                offset = random.randint(-FAR_RANGE, -CLOSE_RANGE - 1)
+            else:
+                offset = random.randint(CLOSE_RANGE + 1, FAR_RANGE)
+
+            if offset not in used_offsets:
+                used_offsets.add(offset)
+                idx = CORRECT_MATCH_IDX + offset
+                if idx >= 0:
+                    candidates.append({"offset": offset, "idx": idx, "type": "DISTRACTOR (Far)"})
+                break
 
     # Clean output dir
     if os.path.exists(BENCHMARK_OUTPUT_DIR):
