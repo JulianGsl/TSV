@@ -17,6 +17,9 @@ from src.alignment.algorithms import orb, brisk, akaze
 VIDEO1_PATH = "./data/PlanTest/video1.mp4"
 VIDEO2_PATH = "./data/PlanTest/video2.mp4"
 
+# Output directory for visualizations
+BENCHMARK_OUTPUT_DIR = "./benchmark_results"
+
 # --- Ranking Benchmark Configuration ---
 # Focus on testing one frame from Video 1 against multiple candidates in Video 2
 
@@ -57,17 +60,86 @@ def get_frame(video_path, frame_idx):
         return None
     return frame
 
+def save_visualization(img1, kp1, img2, kp2, good_matches, mask, algo_name, v1_idx, v2_idx, rank, is_correct, score):
+    """Generates and saves a side-by-side comparison image with colored matches."""
+    # Create algorithm-specific subdirectory
+    algo_dir = os.path.join(BENCHMARK_OUTPUT_DIR, algo_name)
+    if not os.path.exists(algo_dir):
+        os.makedirs(algo_dir)
+
+    h1, w1 = img1.shape[:2]
+    h2, w2 = img2.shape[:2]
+
+    # Resize img2 if needed
+    if h1 != h2 or w1 != w2:
+        img2_resized = cv2.resize(img2, (w1, h1))
+    else:
+        img2_resized = img2
+
+    # Do NOT draw all keypoints. Start with raw images.
+    combined = np.hstack((img1, img2_resized))
+
+    # Draw matches
+    if good_matches and mask is not None:
+        mask_list = mask.ravel().tolist()
+
+        for i, match in enumerate(good_matches):
+            if i < len(mask_list) and mask_list[i] == 1:
+                pt1 = tuple(map(int, kp1[match.queryIdx].pt))
+                pt2 = tuple(map(int, kp2[match.trainIdx].pt))
+                pt2_offset = (pt2[0] + w1, pt2[1]) # Offset for 2nd image
+
+                # Color Logic: Green < 30, Yellow < 50, Orange >= 50
+                if match.distance < 30:
+                    color = (0, 255, 0)      # Green - Excellent
+                elif match.distance < 50:
+                    color = (0, 255, 255)    # Yellow - Good
+                else:
+                    color = (0, 165, 255)    # Orange - Moderate
+
+                # Draw line and points
+                cv2.line(combined, pt1, pt2_offset, color, 1, cv2.LINE_AA)
+                cv2.circle(combined, pt1, 3, color, -1)
+                cv2.circle(combined, pt2_offset, 3, color, -1)
+
+    # Add text labels
+    status = "CORRECT" if is_correct else "DISTRACTOR"
+    status_color = (0, 255, 0) if is_correct else (0, 0, 255)
+
+    # Info Text Top-Left
+    text1 = f"{algo_name} | Rank: {rank} | {status}"
+    text2 = f"Score (Inliers): {score}"
+
+    cv2.putText(combined, text1, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2, cv2.LINE_AA)
+    cv2.putText(combined, text2, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+
+    # Frame Indices on Images (Bottom-Left)
+    cv2.putText(combined, f"Frame {v1_idx}", (10, h1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    cv2.putText(combined, f"Frame {v2_idx}", (w1 + 10, h1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+    # Save
+    filename = f"{algo_name}_rank{rank:02d}_{status}_v2-{v2_idx}.jpg"
+    filepath = os.path.join(algo_dir, filename)
+    cv2.imwrite(filepath, combined)
+
 def evaluate_match(algo_module, img1, img2):
     """
     Computes matching score between two images using the specified algorithm.
-    Includes Homography Scale Check to ensure match quality.
+    Returns score and visualization data.
     """
     # 1. Compute Features
     kp1, des1 = algo_module.compute_features(img1)
     kp2, des2 = algo_module.compute_features(img2)
 
+    empty_result = {
+        "score": 0,
+        "good_matches": [],
+        "mask": None,
+        "keypoints": (kp1, kp2)
+    }
+
     if des1 is None or des2 is None or len(kp1) < 2 or len(kp2) < 2:
-        return {"score": 0}
+        return empty_result
 
     # 2. Match Features
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
@@ -76,7 +148,7 @@ def evaluate_match(algo_module, img1, img2):
         knn_matches = bf.knnMatch(des1, des2, k=2)
     except Exception as e:
         print(f"Matching error: {e}")
-        return {"score": 0}
+        return empty_result
 
     # 3. Ratio Test
     good_matches = []
@@ -92,6 +164,7 @@ def evaluate_match(algo_module, img1, img2):
 
     match_count = len(good_matches)
     inlier_count = 0
+    mask = None
 
     # 4. RANSAC (Homography)
     if match_count >= 4:
@@ -104,29 +177,33 @@ def evaluate_match(algo_module, img1, img2):
                                      confidence=0.999)
         if mask_arr is not None:
             inlier_count = int(np.sum(mask_arr))
+            mask = mask_arr
 
             # --- HOMOGRAPHY SCALE QUALITY CHECK ---
-            # This ensures that we only count matches that are geometrically realistic.
             if M is not None and inlier_count > 0:
                 try:
                     scale_x = np.sqrt(M[0,0]**2 + M[1,0]**2)
                     scale_y = np.sqrt(M[0,1]**2 + M[1,1]**2)
                     if scale_x < 0.7 or scale_x > 1.3 or scale_y < 0.7 or scale_y > 1.3:
-                        # Suspicious transformation, reduce score to penalize bad geometry
                         print(f"  [Warning] Suspicious Scale: x={scale_x:.2f}, y={scale_y:.2f}")
                         inlier_count = int(inlier_count * 0.5)
                 except (ValueError, ZeroDivisionError, IndexError):
                     inlier_count = int(inlier_count * 0.7)
 
-    return {"score": inlier_count}
+    return {
+        "score": inlier_count,
+        "good_matches": good_matches,
+        "mask": mask,
+        "keypoints": (kp1, kp2)
+    }
 
 # =============================================================================
 # MAIN EXECUTION
 # =============================================================================
 
 def main():
-    # Set random seed for reproducibility across runs and algorithms
-    random.seed(42)
+    # Dynamic seed (no fixed seed) so runs are different
+    # But since we generate candidates ONCE here, all algorithms get the SAME candidates.
 
     print(f"Benchmark Script: Discrimination Ranking")
     print(f"Video 1: {VIDEO1_PATH}")
@@ -144,7 +221,7 @@ def main():
         print("Error: Could not load reference frame.")
         return
 
-    # Build candidates
+    # Build candidates (Consistent across algorithms for this run)
     candidates = []
     # 1. Add Correct Match
     candidates.append({"offset": 0, "idx": CORRECT_MATCH_IDX, "type": "CORRECT"})
@@ -164,7 +241,6 @@ def main():
     # 3. Add Random Far Distractors
     for _ in range(NUM_FAR_DISTRACTORS):
         while True:
-            # Generate offset in [-FAR_RANGE, -CLOSE_RANGE] U [CLOSE_RANGE, FAR_RANGE]
             if random.random() < 0.5:
                 offset = random.randint(-FAR_RANGE, -CLOSE_RANGE - 1)
             else:
@@ -176,6 +252,12 @@ def main():
                 if idx >= 0:
                     candidates.append({"offset": offset, "idx": idx, "type": "DISTRACTOR (Far)"})
                 break
+
+    # Clean output dir
+    if os.path.exists(BENCHMARK_OUTPUT_DIR):
+        pass
+    else:
+        os.makedirs(BENCHMARK_OUTPUT_DIR)
 
     for algo_name, algo_module in ALGORITHMS.items():
         print(f"\n--- Testing Algorithm: {algo_name} ---")
@@ -189,13 +271,14 @@ def main():
             if cand_img is None:
                 continue
 
-            # Evaluate purely on visual features + geometric quality
             res = evaluate_match(algo_module, ref_img, cand_img)
 
             cand_result = {
                 "v2_idx": v2_idx,
                 "type": cand["type"],
-                "score": res["score"]
+                "score": res["score"],
+                "data": res,
+                "img": cand_img
             }
             algo_results.append(cand_result)
             print(f"  > V2[{v2_idx:<3}] ({cand['type']:<10}): Score={res['score']}")
@@ -211,13 +294,26 @@ def main():
 
         for rank, res in enumerate(algo_results, 1):
             print(f"  {rank:<5} | {res['v2_idx']:<5} | {res['type']:<18} | {res['score']:<5}")
+
             if res["type"] == "CORRECT":
                 correct_found_at_rank = rank
+
+            # Visualize Top 3 and Correct one
+            should_visualize = (rank <= 3) or (res["type"] == "CORRECT")
+
+            if should_visualize and res["score"] > 0:
+                kp1, kp2 = res["data"]["keypoints"]
+                save_visualization(ref_img, kp1, res["img"], kp2,
+                                   res["data"]["good_matches"], res["data"]["mask"],
+                                   algo_name, REFERENCE_FRAME_IDX, res["v2_idx"],
+                                   rank, res["type"] == "CORRECT", res["score"])
 
         if correct_found_at_rank == 1:
             print(f"\n  [SUCCESS] {algo_name} ranked correct match #1.")
         else:
             print(f"\n  [FAILURE] {algo_name} ranked correct match #{correct_found_at_rank}.")
+
+    print(f"\nVisualizations saved to {BENCHMARK_OUTPUT_DIR}/<Algorithm>/")
 
 if __name__ == "__main__":
     main()
