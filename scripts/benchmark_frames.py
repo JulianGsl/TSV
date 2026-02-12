@@ -30,12 +30,6 @@ CLOSE_RANGE = 10            # +/- frames for close distractors (e.g., +/- 10)
 NUM_FAR_DISTRACTORS = 5     # Number of frames far from the correct match
 FAR_RANGE = 100             # +/- frames for far distractors (e.g., +/- 100)
 
-# Scoring Parameters (from src/alignment/core.py)
-# We disable the distance penalty for benchmarking to test pure visual discrimination.
-# If an algorithm ranks a distractor higher than the correct frame, it has failed visually.
-BASE_PENALTY = 1.0
-PENALTY_FACTOR = 0.0 # Disabled penalty (was BASE_PENALTY * 1.0)
-
 # Algorithms to test
 ALGORITHMS = {
     "ORB": orb,
@@ -63,22 +57,17 @@ def get_frame(video_path, frame_idx):
         return None
     return frame
 
-def evaluate_match(algo_module, img1, img2, v2_idx, expected_pos):
+def evaluate_match(algo_module, img1, img2):
     """
     Computes matching score between two images using the specified algorithm.
-    Includes Homography Scale Penalty and Distance Penalty logic from core.py.
+    Includes Homography Scale Check to ensure match quality.
     """
     # 1. Compute Features
     kp1, des1 = algo_module.compute_features(img1)
     kp2, des2 = algo_module.compute_features(img2)
 
-    empty_result = {
-        "inliers": 0,
-        "weighted_score": -float('inf')
-    }
-
     if des1 is None or des2 is None or len(kp1) < 2 or len(kp2) < 2:
-        return empty_result
+        return {"score": 0}
 
     # 2. Match Features
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
@@ -87,7 +76,7 @@ def evaluate_match(algo_module, img1, img2, v2_idx, expected_pos):
         knn_matches = bf.knnMatch(des1, des2, k=2)
     except Exception as e:
         print(f"Matching error: {e}")
-        return empty_result
+        return {"score": 0}
 
     # 3. Ratio Test
     good_matches = []
@@ -116,27 +105,20 @@ def evaluate_match(algo_module, img1, img2, v2_idx, expected_pos):
         if mask_arr is not None:
             inlier_count = int(np.sum(mask_arr))
 
-            # --- HOMOGRAPHY SCALE PENALTY (from core.py) ---
+            # --- HOMOGRAPHY SCALE QUALITY CHECK ---
+            # This ensures that we only count matches that are geometrically realistic.
             if M is not None and inlier_count > 0:
                 try:
                     scale_x = np.sqrt(M[0,0]**2 + M[1,0]**2)
                     scale_y = np.sqrt(M[0,1]**2 + M[1,1]**2)
                     if scale_x < 0.7 or scale_x > 1.3 or scale_y < 0.7 or scale_y > 1.3:
-                        print(f"  [Penalty] Suspicious Scale: x={scale_x:.2f}, y={scale_y:.2f}")
+                        # Suspicious transformation, reduce score to penalize bad geometry
+                        print(f"  [Warning] Suspicious Scale: x={scale_x:.2f}, y={scale_y:.2f}")
                         inlier_count = int(inlier_count * 0.5)
                 except (ValueError, ZeroDivisionError, IndexError):
                     inlier_count = int(inlier_count * 0.7)
 
-    # --- DISTANCE PENALTY (from core.py) ---
-    # weighted = inlier_count - penalty
-    dist = abs(v2_idx - expected_pos)
-    penalty = dist * PENALTY_FACTOR
-    weighted_score = inlier_count - penalty
-
-    return {
-        "inliers": inlier_count, # This is the penalized inlier count
-        "weighted_score": weighted_score
-    }
+    return {"score": inlier_count}
 
 # =============================================================================
 # MAIN EXECUTION
@@ -146,12 +128,11 @@ def main():
     # Set random seed for reproducibility across runs and algorithms
     random.seed(42)
 
-    print(f"Benchmark Script: Discrimination Ranking (Exact Scoring)")
+    print(f"Benchmark Script: Discrimination Ranking")
     print(f"Video 1: {VIDEO1_PATH}")
     print(f"Video 2: {VIDEO2_PATH}")
     print(f"Reference Frame (V1): {REFERENCE_FRAME_IDX}")
     print(f"Expected Match (V2):  {CORRECT_MATCH_IDX}")
-    print(f"Penalty Factor:       {PENALTY_FACTOR:.2f}")
     print("=" * 60)
 
     if not os.path.exists(VIDEO1_PATH) or not os.path.exists(VIDEO2_PATH):
@@ -208,29 +189,28 @@ def main():
             if cand_img is None:
                 continue
 
-            # Pass v2_idx and expected_pos for weighted score calculation
-            res = evaluate_match(algo_module, ref_img, cand_img, v2_idx, CORRECT_MATCH_IDX)
+            # Evaluate purely on visual features + geometric quality
+            res = evaluate_match(algo_module, ref_img, cand_img)
 
             cand_result = {
                 "v2_idx": v2_idx,
                 "type": cand["type"],
-                "inliers": res["inliers"],
-                "weighted_score": res["weighted_score"]
+                "score": res["score"]
             }
             algo_results.append(cand_result)
-            print(f"  > V2[{v2_idx:<3}] ({cand['type']:<10}): Inliers={res['inliers']}, Weighted={res['weighted_score']:.1f}")
+            print(f"  > V2[{v2_idx:<3}] ({cand['type']:<10}): Score={res['score']}")
 
-        # Sort results by Weighted Score (descending)
-        algo_results.sort(key=lambda x: x["weighted_score"], reverse=True)
+        # Sort results by Score (descending)
+        algo_results.sort(key=lambda x: x["score"], reverse=True)
 
         print(f"\n  Ranking for {algo_name}:")
-        print(f"  {'Rank':<5} | {'Frame':<5} | {'Type':<10} | {'Inliers':<7} | {'Weighted':<8}")
-        print("  " + "-" * 60)
+        print(f"  {'Rank':<5} | {'Frame':<5} | {'Type':<18} | {'Score':<5}")
+        print("  " + "-" * 50)
 
         correct_found_at_rank = -1
 
         for rank, res in enumerate(algo_results, 1):
-            print(f"  {rank:<5} | {res['v2_idx']:<5} | {res['type']:<10} | {res['inliers']:<7} | {res['weighted_score']:<8.1f}")
+            print(f"  {rank:<5} | {res['v2_idx']:<5} | {res['type']:<18} | {res['score']:<5}")
             if res["type"] == "CORRECT":
                 correct_found_at_rank = rank
 
