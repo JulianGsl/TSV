@@ -216,18 +216,36 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 
                 # Apply Lowe's ratio test to filter good matches
                 good_matches = []
+                height = frame1.shape[0]  # Assuming both videos have same resolution
+                min_y = height * 0.33     # Filter out top 33% (horizon features)
+
                 for match_pair in knn_matches:
+                    m = None
                     # Ensure we have two matches
                     if len(match_pair) == 2:
-                        m, n = match_pair
+                        m_cand, n_cand = match_pair
                         # If best match is significantly better than second best
-                        if m.distance < 0.75 * n.distance:
-                            good_matches.append(m)
+                        if m_cand.distance < 0.75 * n_cand.distance:
+                            m = m_cand
                     elif len(match_pair) == 1:
                         # If only one match, check if distance is reasonable
                         m = match_pair[0]
-                        if m.distance < 50:
-                            good_matches.append(m)
+
+                    if m is not None:
+                        # 1. Check "bad link" (distance threshold)
+                        if m.distance >= 50:
+                            continue
+
+                        # 2. Check "detected far" (spatial filtering)
+                        # Ignore features in the top part of the image (horizon)
+                        # where motion is small and prone to drift.
+                        pt1 = kp1[m.queryIdx].pt
+                        pt2 = kp2[m.trainIdx].pt
+
+                        if pt1[1] < min_y or pt2[1] < min_y:
+                            continue
+
+                        good_matches.append(m)
                 
                 # Filter by match count - use adaptive threshold based on detected features
                 min_matches = max(8, min(10, len(kp1) // 20))

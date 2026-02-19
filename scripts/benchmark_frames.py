@@ -150,17 +150,33 @@ def evaluate_match(algo_module, img1, img2):
         print(f"Matching error: {e}")
         return empty_result
 
-    # 3. Ratio Test
+    # 3. Ratio Test & Filtering
     good_matches = []
+    height = img1.shape[0]
+    min_y = height * 0.33  # Filter out top 33%
+
     for match_pair in knn_matches:
+        m = None
         if len(match_pair) == 2:
-            m, n = match_pair
-            if m.distance < 0.75 * n.distance:
-                good_matches.append(m)
+            m_cand, n_cand = match_pair
+            if m_cand.distance < 0.75 * n_cand.distance:
+                m = m_cand
         elif len(match_pair) == 1:
             m = match_pair[0]
-            if m.distance < 50:
-                good_matches.append(m)
+
+        if m is not None:
+            # 1. Check "bad link" (distance threshold)
+            if m.distance >= 50:
+                continue
+
+            # 2. Check "detected far" (spatial filtering)
+            pt1 = kp1[m.queryIdx].pt
+            pt2 = kp2[m.trainIdx].pt
+
+            if pt1[1] < min_y or pt2[1] < min_y:
+                continue
+
+            good_matches.append(m)
 
     match_count = len(good_matches)
     inlier_count = 0
