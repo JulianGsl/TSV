@@ -299,17 +299,54 @@ def main():
             algo_results.append(cand_result)
             print(f"  > V2[{v2_idx:<3}] ({cand['type']:<10}): Score={res['score']}")
 
-        # Sort results by Score (descending)
-        algo_results.sort(key=lambda x: x["score"], reverse=True)
+        # --- Apply Temporal Clustering Simulation ---
+        # The core algorithm now looks at neighbors. We need to simulate this.
+        # Since we only have sparse candidates in this benchmark, this is an approximation.
+        # However, for the CORRECT match, we know its neighbors are likely close.
+        # For Distractors, they might be isolated.
+
+        # To truly verify the "Cluster" logic, we should probably fetch neighbors for each candidate
+        # and compute the cluster score.
+
+        print("\n  Computing Cluster Scores (Simulated +/- 1 frame)...")
+
+        for res in algo_results:
+            idx = res["v2_idx"]
+            raw_score = res["score"]
+
+            # Fetch neighbors to compute cluster score
+            neighbor_scores = []
+            for offset in [-1, 1]:
+                n_idx = idx + offset
+                # Check if we already have this frame in our results?
+                # Likely not, unless it was generated as a candidate.
+                # So we must fetch and compute it.
+                n_img = get_frame(VIDEO2_PATH, n_idx)
+                if n_img is not None:
+                    n_res = evaluate_match(algo_module, ref_img, n_img)
+                    neighbor_scores.append(n_res["score"])
+
+            # Apply same logic as core.py
+            if neighbor_scores:
+                avg_neighbor_score = sum(neighbor_scores) / len(neighbor_scores)
+                cluster_score = raw_score + 0.5 * avg_neighbor_score
+            else:
+                cluster_score = raw_score
+
+            res["cluster_score"] = cluster_score
+            print(f"    V2[{idx}] Cluster Score: {cluster_score:.1f} (Raw: {raw_score}, Neighbors: {neighbor_scores})")
+
+        # Sort results by Cluster Score (descending)
+        algo_results.sort(key=lambda x: x["cluster_score"], reverse=True)
 
         print(f"\n  Ranking for {algo_name}:")
-        print(f"  {'Rank':<5} | {'Frame':<5} | {'Type':<18} | {'Score':<5}")
-        print("  " + "-" * 50)
+        print(f"  {'Rank':<5} | {'Frame':<5} | {'Type':<18} | {'Score':<5} | {'Cluster':<7}")
+        print("  " + "-" * 60)
 
         correct_found_at_rank = -1
 
         for rank, res in enumerate(algo_results, 1):
-            print(f"  {rank:<5} | {res['v2_idx']:<5} | {res['type']:<18} | {res['score']:<5}")
+            print(f"  {rank:<5} | {res['v2_idx']:<5} | {res['type']:<18} | {res['score']:<5} | {res['cluster_score']:.1f}")
 
             if res["type"] == "CORRECT":
                 correct_found_at_rank = rank

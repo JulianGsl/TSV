@@ -58,7 +58,7 @@ def main():
 
     # Video 2: Slower speed (so it takes longer to traverse)
     # Start at same position.
-    create_moving_rect_video(v2_path, speed=3, duration=8)
+    create_moving_rect_video(v2_path, speed=5, duration=8)
 
 if __name__ == "__main__":
     main()

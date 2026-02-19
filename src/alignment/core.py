@@ -259,26 +259,16 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             # Advance by the configured step (allows sparse candidate sampling)
             current_search_idx += search_step
 
-        # Process candidates with Branch and Bound optimization
-        # We want to find the candidate with max (inliers - penalty).
-        # We visit candidates closest to expected_pos first.
-        # We skip RANSAC if (raw_matches - penalty) <= current_best_score.
+        # Process candidates to find a "Cluster of Frames" with high scores
+        # Instead of picking the single best frame, we look for a sequence of frames
+        # that all have high scores, indicating a robust match.
 
         expected_pos = predicted_v2_frame
 
-        # Sort by distance from expected position (closest first)
-        raw_candidates.sort(key=lambda x: abs(x["idx"] - expected_pos))
-
-        best_weighted_score = -float('inf')
-
-        # Also keep track of the raw match score for logging
-        best_match_raw_score = 0
+        # Compute scores for all candidates first (no branch & bound skipping)
+        processed_candidates = []
         
         # Adaptive penalty based on velocity confidence
-        # Higher confidence = higher penalty (more strict about position)
-        # Lower confidence = lower penalty (more flexible search)
-        # Penalty factor ranges from 0.5 (low confidence) to 2.0 (high confidence)
-        # Reduced from previous values to be less conservative
         base_penalty = 1.0
         penalty_factor = base_penalty * (0.5 + velocity_confidence)
 
@@ -287,25 +277,13 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             good_matches = cand["matches"]
             kp2 = cand["kp2"]
 
-            dist = abs(idx - expected_pos)
-            penalty = dist * penalty_factor
-
-            # Upper bound: even if all good matches are inliers
-            max_possible_score = len(good_matches) - penalty
-
-            if max_possible_score <= best_weighted_score:
-                continue
-
             # Run RANSAC with improved parameters
             inlier_count = 0
             if len(good_matches) >= 4:
                 src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
                 dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
 
-                # Improved RANSAC parameters:
-                # - ransacReprojThreshold: 2.5 (tighter than before for rail tracks)
-                # - maxIters: 2000 (increased for better reliability)
-                # - confidence: 0.999 (very high confidence)
+                # Improved RANSAC parameters
                 M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 
                                             ransacReprojThreshold=2.5,
                                             maxIters=2000,
@@ -313,29 +291,74 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 if mask is not None:
                     inlier_count = int(np.sum(mask))
                     
-                    # Additional quality check: verify homography is reasonable
-                    # For rail track videos, we expect mostly translation with minimal rotation/scaling
+                    # Homography Scale Check
                     if M is not None and inlier_count > 0:
-                        # Check that transformation is not too extreme
-                        # Decompose to check if scale and rotation are reasonable
                         try:
-                            # Extract scale from homography
                             scale_x = np.sqrt(M[0,0]**2 + M[1,0]**2)
                             scale_y = np.sqrt(M[0,1]**2 + M[1,1]**2)
-                            # For rail tracks, scale should be close to 1.0
                             if scale_x < 0.7 or scale_x > 1.3 or scale_y < 0.7 or scale_y > 1.3:
-                                # Suspicious transformation, reduce confidence
                                 inlier_count = int(inlier_count * 0.5)
                         except (ValueError, ZeroDivisionError, IndexError):
-                            # If decomposition fails, reduce confidence
                             inlier_count = int(inlier_count * 0.7)
 
-            weighted = inlier_count - penalty
+            processed_candidates.append({
+                "idx": idx,
+                "score": inlier_count
+            })
 
-            if weighted > best_weighted_score:
-                best_weighted_score = weighted
+        # Sort candidates by index for clustering logic
+        processed_candidates.sort(key=lambda x: x["idx"])
+
+        best_cluster_score = -float('inf')
+        best_match_raw_score = 0
+        best_v2_idx = -1
+
+        # Apply Temporal Clustering (Convolution)
+        # Look at neighbors to boost score
+        # Cluster Score = Score[i] + 0.5 * (Score[i-1] + Score[i+1])
+
+        candidate_map = {c["idx"]: c["score"] for c in processed_candidates}
+
+        for cand in processed_candidates:
+            idx = cand["idx"]
+            raw_score = cand["score"]
+
+            # Check neighbors (assume step=1 or search_step)
+            # We look for immediate neighbors in the candidate list or by index
+            # Here we check by index to be precise
+
+            cluster_boost = 0
+            neighbor_count = 0
+
+            # Check range +/- 2 frames
+            for offset in range(-2, 3):
+                if offset == 0: continue
+                neighbor_idx = idx + offset
+                if neighbor_idx in candidate_map:
+                    cluster_boost += candidate_map[neighbor_idx]
+                    neighbor_count += 1
+
+            # Weighted Cluster Score
+            # Base score + 0.5 * Average of neighbors
+            if neighbor_count > 0:
+                cluster_score = raw_score + 0.5 * (cluster_boost / neighbor_count)
+            else:
+                cluster_score = raw_score
+
+            # Apply Distance Penalty to the CLUSTERED score
+            dist = abs(idx - expected_pos)
+            penalty = dist * penalty_factor
+
+            final_score = cluster_score - penalty
+
+            if final_score > best_cluster_score:
+                best_cluster_score = final_score
                 best_v2_idx = idx
-                best_match_raw_score = inlier_count # We return the raw score (inliers) for display
+                best_match_raw_score = raw_score # Keep the raw score for display
+
+        # Use best_cluster_score for threshold check?
+        # Or raw score? Let's use the clustered score to be consistent.
+        best_weighted_score = best_cluster_score
 
         # Adaptive threshold based on match quality and velocity confidence
         # Higher velocity confidence = stricter threshold (more negative, harder to pass)
