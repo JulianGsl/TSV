@@ -41,8 +41,16 @@ def create_aligned_video(video1_path, video2_path, path, output_video_path):
 
     total_width = target_width1 + target_width2
 
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    # Using 'avc1' (H.264) for QuickTime compatibility on Mac.
+    # Note: 'mp4v' was used previously, but QuickTime on macOS drops support for older 'mp4v' codecs.
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (total_width, target_height))
+
+    # Check if VideoWriter opened successfully. Sometimes 'avc1' requires openh264 in some envs.
+    if not out.isOpened():
+        print("Warning: avc1 codec failed to initialize. Falling back to mp4v...")
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_video_path, fourcc, fps, (total_width, target_height))
 
     print(f"Generating aligned video: {output_video_path}")
     print(f"Total frames: {len(path)}")
