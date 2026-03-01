@@ -21,13 +21,23 @@ class TestFeatureExtraction(unittest.TestCase):
 
     def test_extract_features(self):
         extractor = VideoFeatureExtractor(resize_dim=(160, 120))
-        features = extractor.extract_features(self.video_path)
+        features, indices = extractor.extract_features(self.video_path)
 
-        # Check shape
-        self.assertEqual(features.shape, (10, 5))
+        # Check shape (10 frames, 12 features: 3 regions * 4 stats)
+        self.assertEqual(features.shape, (10, 12))
+        self.assertEqual(len(indices), 10)
+        self.assertEqual(indices, list(range(10)))
 
         # Check that features are not all zero (except maybe first frame)
         self.assertTrue(np.any(features[1:]))
+
+    def test_sample_rate(self):
+        extractor = VideoFeatureExtractor(resize_dim=(160, 120), sample_rate=2)
+        features, indices = extractor.extract_features(self.video_path)
+
+        # Should process frames 0, 2, 4, 6, 8
+        self.assertEqual(features.shape, (5, 12))
+        self.assertEqual(indices, [0, 2, 4, 6, 8])
 
 if __name__ == "__main__":
     unittest.main()

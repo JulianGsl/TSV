@@ -130,6 +130,8 @@ def main():
     parser.add_argument("--output", default="alignment_result.png", help="Path to save the alignment plot")
     parser.add_argument("--video-output", default="aligned_video.mp4", help="Path to save the aligned side-by-side video")
     parser.add_argument("--no-video", action="store_true", help="Skip video generation")
+    parser.add_argument("--sample-rate", type=int, default=2, help="Process every Nth frame for speed (default: 2)")
+    parser.add_argument("--penalty", type=float, default=1.5, help="Step penalty for DTW to prevent stuttering (default: 1.5)")
 
     args = parser.parse_args()
 
@@ -143,14 +145,15 @@ def main():
         return
 
     print(f"Processing: {args.video1} and {args.video2}")
+    print(f"Parameters: sample_rate={args.sample_rate}, step_penalty={args.penalty}")
 
     print("Extracting features from Video 1...")
-    extractor = VideoFeatureExtractor()
-    features1 = extractor.extract_features(args.video1)
+    extractor = VideoFeatureExtractor(sample_rate=args.sample_rate)
+    features1, indices1 = extractor.extract_features(args.video1)
     print(f"Features 1 shape: {features1.shape}")
 
     print("Extracting features from Video 2...")
-    features2 = extractor.extract_features(args.video2)
+    features2, indices2 = extractor.extract_features(args.video2)
     print(f"Features 2 shape: {features2.shape}")
 
     print("Computing DTW alignment...")
@@ -164,22 +167,30 @@ def main():
     f2_std = np.std(features2, axis=0) + 1e-6
     features2_norm = (features2 - f2_mean) / f2_std
 
-    path, cost_matrix = compute_dtw(features1_norm, features2_norm)
+    path, cost_matrix = compute_dtw(features1_norm, features2_norm, step_penalty=args.penalty)
+
+    # Map DTW path indices back to original video frame indices
+    real_path = [(indices1[i], indices2[j]) for i, j in path]
 
     print(f"Alignment complete. Path length: {len(path)}")
     print(f"Final cost: {cost_matrix[-1, -1]}")
 
     # Visualization
-    # Unzip path into x and y coordinates
-    path_x, path_y = zip(*path)
+    # Unzip mapped path into x and y coordinates for plotting
+    path_x, path_y = zip(*real_path)
 
     plt.figure(figsize=(10, 8))
     # Display cost matrix. Transpose to match X-axis=Video1, Y-axis=Video2
+    # Note: Cost matrix axes are downsampled indices, so we map the ticks
     plt.imshow(cost_matrix.T, origin='lower', cmap='viridis', interpolation='nearest', aspect='auto')
-    plt.plot(path_x, path_y, 'r-', linewidth=2, label='Alignment Path')
+
+    # Plot un-mapped path on top of cost matrix
+    raw_path_x, raw_path_y = zip(*path)
+    plt.plot(raw_path_x, raw_path_y, 'r-', linewidth=2, label='Alignment Path')
+
     plt.colorbar(label='Accumulated Cost')
-    plt.xlabel('Video 1 Frame Index')
-    plt.ylabel('Video 2 Frame Index')
+    plt.xlabel('Video 1 (Downsampled Index)')
+    plt.ylabel('Video 2 (Downsampled Index)')
     plt.title(f'DTW Alignment Cost Matrix\n{os.path.basename(args.video1)} vs {os.path.basename(args.video2)}')
     plt.legend()
     plt.tight_layout()
@@ -187,7 +198,8 @@ def main():
     print(f"Alignment plot saved to {args.output}")
 
     if not args.no_video:
-        create_aligned_video(args.video1, args.video2, path, args.video_output)
+        # Create video using the real frame indices mapping
+        create_aligned_video(args.video1, args.video2, real_path, args.video_output)
 
 if __name__ == "__main__":
     main()
