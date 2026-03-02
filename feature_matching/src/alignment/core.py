@@ -256,13 +256,13 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         # Also keep track of the raw match score for logging
         best_match_raw_score = 0
         
-        # Adaptive penalty based on velocity confidence
-        # Higher confidence = higher penalty (more strict about position)
-        # Lower confidence = lower penalty (more flexible search)
-        # Penalty factor ranges from 0.5 (low confidence) to 2.0 (high confidence)
-        # Reduced from previous values to be less conservative
-        base_penalty = 1.0
-        penalty_factor = base_penalty * (0.5 + velocity_confidence)
+        import math
+
+        # Exponential decay penalty based on distance
+        # f(dist) = e^(-k(dist - 1))
+        # k: sensitivity constant. Higher confidence -> higher sensitivity (harsher penalty)
+        base_k = 0.15
+        k = base_k * (0.5 + velocity_confidence)
 
         for cand in raw_candidates:
             idx = cand["idx"]
@@ -270,10 +270,13 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             kp2 = cand["kp2"]
 
             dist = abs(idx - expected_pos)
-            penalty = dist * penalty_factor
+
+            # Apply the exponential decay penalty: e^(-k * max(0, dist - 1))
+            # No penalty if distance <= 1.
+            penalty_multiplier = math.exp(-k * max(0, dist - 1))
 
             # Upper bound: even if all good matches are inliers
-            max_possible_score = len(good_matches) - penalty
+            max_possible_score = len(good_matches) * penalty_multiplier
 
             if max_possible_score <= best_weighted_score:
                 continue
@@ -312,7 +315,8 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                             # If decomposition fails, reduce confidence
                             inlier_count = int(inlier_count * 0.7)
 
-            weighted = inlier_count - penalty
+            # Apply the exponential decay penalty factor to the base score (C)
+            weighted = inlier_count * penalty_multiplier
 
             if weighted > best_weighted_score:
                 best_weighted_score = weighted
@@ -320,11 +324,11 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 best_match_raw_score = inlier_count # We return the raw score (inliers) for display
 
         # Adaptive threshold based on match quality and velocity confidence
-        # Higher velocity confidence = stricter threshold (more negative, harder to pass)
-        # Lower confidence = more lenient threshold (less negative, easier to pass)
-        acceptance_threshold = -100 - (velocity_confidence * 50)
+        # The threshold is now positive because weighted is a multiplier on a positive score.
+        # e.g., We need at least 4 inliers after penalty to consider it a valid match.
+        acceptance_threshold = 4.0 * (0.5 + velocity_confidence)
         
-        if best_v2_idx != -1 and best_weighted_score > acceptance_threshold:
+        if best_v2_idx != -1 and best_weighted_score >= acceptance_threshold:
             best_match_score = best_match_raw_score
 
             print(f"V1 {v1_frame_idx} -> V2 {best_v2_idx} (Score: {best_match_score}, Weighted: {best_weighted_score:.1f}, Vel: {estimated_velocity:.2f}, Conf: {velocity_confidence:.2f})")
