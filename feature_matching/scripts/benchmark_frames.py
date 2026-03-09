@@ -4,18 +4,19 @@ import sys
 import os
 import random
 
-# Ensure src can be imported
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+# Ensure project root is in path
+sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
-from src.alignment.algorithms import orb, brisk, akaze
+# Update imports to use feature_matching.src
+from feature_matching.src.alignment.algorithms import orb, brisk, akaze
 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
 # Paths to the videos
-VIDEO1_PATH = "./data/PlanTest/video1.mp4"
-VIDEO2_PATH = "./data/PlanTest/video2.mp4"
+VIDEO1_PATH = "./dataset/PlanTest/video1.mp4"
+VIDEO2_PATH = "./dataset/PlanTest/video2.mp4"
 
 # Output directory for visualizations
 BENCHMARK_OUTPUT_DIR = "./benchmark_results"
