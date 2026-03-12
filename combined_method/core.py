@@ -82,6 +82,14 @@ _CONSISTENCY_CONFIDENCE_WEIGHT = 0.3
 _DRIFT_BIAS_THRESHOLD = 0.2   # minimum bias magnitude to trigger recalibration
 _DRIFT_STD_THRESHOLD = 0.1    # only recalibrate when measurements are consistent
 
+# Search window size per V1 sample step.
+# The effective search window is auto-scaled as: search_window = sample_rate * this value.
+# This means that if you process every frame (sample_rate=1) you get a tight window
+# (20 V2 frames to check), while sampling every 15th frame gives a proportionally
+# wider window (300 V2 frames) so the correct match is never missed.
+# Can be overridden by passing an explicit search_window argument.
+_WINDOW_FRAMES_PER_SAMPLE_STEP = 20
+
 def _build_dtw_predictor(video1_path, video2_path, dtw_sample_rate=10, penalty=1.5):
     """
     Runs DTW on optical flow features and returns:
@@ -175,7 +183,7 @@ def align_coarse_to_fine(
     algo_name="ORB",
     sample_rate=1,
     dtw_sample_rate=10,
-    search_window=60,
+    search_window=None,
     search_step=1,
     dtw_penalty=1.5,
     dtw_weight=0.5,
@@ -189,23 +197,38 @@ def align_coarse_to_fine(
     Phase 3 – DTW prediction used as fallback when feature matching fails.
 
     Args:
-        video1_path (str):   Path to the reference video.
-        video2_path (str):   Path to the second video.
-        algo_name (str):     Feature detector ("ORB", "BRISK", "AKAZE").
-        sample_rate (int):   Process every Nth V1 frame for feature matching.
+        video1_path (str):     Path to the reference video.
+        video2_path (str):     Path to the second video.
+        algo_name (str):       Feature detector ("ORB", "BRISK", "AKAZE").
+        sample_rate (int):     Process every Nth V1 frame for feature matching.
+                               Controls the speed/accuracy trade-off:
+                               - sample_rate=1  → every frame, slow but dense output
+                               - sample_rate=15 → every 15th frame, fast but sparser
         dtw_sample_rate (int): Frame sampling rate for the DTW optical-flow phase.
-        search_window (int): Total width of the search window in V2 frames.
-        search_step (int):   Step size inside the search window.
-        dtw_penalty (float): Step penalty passed to DTW (reduces stuttering).
-        dtw_weight (float):  Initial weight for DTW prediction vs Kalman prediction
-                             (0 = Kalman only, 1 = DTW only). Decreases as local
-                             confidence grows.
+        search_window (int|None): Total width of the V2 search window in frames.
+                               When None (default), auto-computed as:
+                               ``sample_rate * _WINDOW_FRAMES_PER_SAMPLE_STEP``
+                               so that larger sample steps get proportionally wider
+                               windows (e.g. sample_rate=1 → 20 frames,
+                               sample_rate=15 → 300 frames).
+        search_step (int):     Step size inside the search window.
+        dtw_penalty (float):   Step penalty passed to DTW (reduces stuttering).
+        dtw_weight (float):    Initial weight for DTW prediction vs Kalman prediction
+                               (0 = Kalman only, 1 = DTW only). Decreases as local
+                               confidence grows.
 
     Returns:
         list[dict]: Alignment results with keys 'v1_frame', 'v2_frame', 'score',
                     'algorithm'.  Fallback frames have score=0.
     """
-    print(f"Combined alignment: {video1_path} + {video2_path}  algo={algo_name}")
+    # Auto-scale search window: tighter window for dense sampling, wider for sparse.
+    if search_window is None:
+        search_window = sample_rate * _WINDOW_FRAMES_PER_SAMPLE_STEP
+
+    print(
+        f"Combined alignment: {video1_path} + {video2_path}  algo={algo_name}"
+        f"  sample_rate={sample_rate}  search_window={search_window}"
+    )
 
     if algo_name not in ALGORITHMS:
         print(f"Error: Unknown algorithm '{algo_name}'")

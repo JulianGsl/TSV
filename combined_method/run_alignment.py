@@ -93,13 +93,14 @@ def process_plan(plan_name, skip_video=False):
         return
 
     for algo in ALGORITHMS:
-        # Improved coarse-to-fine: processes every frame with DTW-guided search window
-        # dtw_sample_rate=10 gives a finer DTW prediction than the old sample_rate=15
-        # search_window=60 is wider than the old window_size=15 but DTW keeps it centred
+        # Improved coarse-to-fine: search_window is auto-scaled from sample_rate.
+        # - sample_rate=1  → every frame, window=20   (slow, dense, precise)
+        # - sample_rate=15 → every 15th frame, window=300 (fast, sparser, same range)
+        # Pass an explicit search_window to override the auto-scaling behaviour.
         run_alignment_and_save(
             video1_path, video2_path, algo, plan_dir,
             "coarse_to_fine", align_coarse_to_fine,
-            sample_rate=1, dtw_sample_rate=10, search_window=60,
+            sample_rate=1, dtw_sample_rate=10,
         )
 
         # Fusion: builds a fused optical-flow + keypoint distance matrix, then runs DTW
