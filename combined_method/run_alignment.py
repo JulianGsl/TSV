@@ -93,11 +93,21 @@ def process_plan(plan_name, skip_video=False):
         return
 
     for algo in ALGORITHMS:
-        # Run Coarse to Fine
-        run_alignment_and_save(video1_path, video2_path, algo, plan_dir, "coarse_to_fine", align_coarse_to_fine, sample_rate=15, window_size=15)
+        # Improved coarse-to-fine: processes every frame with DTW-guided search window
+        # dtw_sample_rate=10 gives a finer DTW prediction than the old sample_rate=15
+        # search_window=60 is wider than the old window_size=15 but DTW keeps it centred
+        run_alignment_and_save(
+            video1_path, video2_path, algo, plan_dir,
+            "coarse_to_fine", align_coarse_to_fine,
+            sample_rate=1, dtw_sample_rate=10, search_window=60,
+        )
 
-        # Run Fusion
-        run_alignment_and_save(video1_path, video2_path, algo, plan_dir, "fusion", align_fusion, sample_rate=15, penalty=1.5)
+        # Fusion: builds a fused optical-flow + keypoint distance matrix, then runs DTW
+        run_alignment_and_save(
+            video1_path, video2_path, algo, plan_dir,
+            "fusion", align_fusion,
+            sample_rate=10, penalty=1.5,
+        )
 
 
 def main():
