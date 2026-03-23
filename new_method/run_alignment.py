@@ -125,8 +125,8 @@ def create_aligned_video(video1_path, video2_path, path, output_video_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Video Temporal Alignment using DTW")
-    parser.add_argument("video1", nargs="?", default="dataset/PlanTest/video1.mp4", help="Path to the first video (default: dataset/PlanTest/video1.mp4)")
-    parser.add_argument("video2", nargs="?", default="dataset/PlanTest/video2.mp4", help="Path to the second video (default: dataset/PlanTest/video2.mp4)")
+    parser.add_argument("video1", nargs="?", default="../dataset/Plan2/video1.mp4", help="Path to the first video (default: dataset/PlanTest/video1.mp4)")
+    parser.add_argument("video2", nargs="?", default="../dataset/Plan2/video2.mp4", help="Path to the second video (default: dataset/PlanTest/video2.mp4)")
     parser.add_argument("--output", default="alignment_result.png", help="Path to save the alignment plot")
     parser.add_argument("--video-output", default="aligned_video.mp4", help="Path to save the aligned side-by-side video")
     parser.add_argument("--no-video", action="store_true", help="Skip video generation")

@@ -7,24 +7,19 @@ import sys
 import os
 import csv
 
-# Add project root to path to allow importing feature_matching.src
-# The file is in feature_matching/scripts/run_alignment.py
-# So we need to go up two levels: ../../
-sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
+# Add project root to path to allow importing src
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-# Update imports to reflect the new structure
-from feature_matching.src.alignment.core import align_videos
-from feature_matching.src.alignment.utils import filter_outliers_and_smooth
-from feature_matching.src.alignment.visualization import plot_alignment, create_side_by_side_video, generate_html_report
+from src.alignment.core import align_videos
+from src.alignment.utils import filter_outliers_and_smooth
+from src.alignment.visualization import plot_alignment, create_side_by_side_video, generate_html_report
 
-# Update dataset path relative to script execution
-DATASET_DIR = "dataset"
+DATASET_DIR = "../../dataset"
 ALGORITHMS = ["ORB", "BRISK", "AKAZE"]
 
 def get_available_plans():
     """Returns a list of Plan directories in the dataset folder."""
     if not os.path.exists(DATASET_DIR):
-        print(f"Warning: Dataset directory '{DATASET_DIR}' not found.")
         return []
 
     plans = []
@@ -136,7 +131,6 @@ def main():
         return
 
     # Argument handling for automation
-    selected_plans = []
     if len(sys.argv) > 1:
         arg = sys.argv[1]
         if arg.lower() == "all":
@@ -158,6 +152,7 @@ def main():
 
         choice = input("\nSelect a plan number or option: ").strip().lower()
 
+        selected_plans = []
         if choice == 'a':
             selected_plans = plans
         elif choice == 'q':

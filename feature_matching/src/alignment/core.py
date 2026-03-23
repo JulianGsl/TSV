@@ -5,8 +5,6 @@ This module handles the logic for aligning two videos using feature matching.
 
 import cv2
 import numpy as np
-import sys
-import os
 
 # Import our algorithms
 from .algorithms import orb
@@ -18,6 +16,63 @@ ALGORITHMS = {
     "BRISK": brisk,
     "AKAZE": akaze
 }
+
+
+def filter_matches_by_spatial_consistency(kp1, kp2, matches, img_width, center_tolerance_pixels=100):
+    """
+    Filtre les matches par cohérence spatiale gauche/droite.
+
+    Division simple 50/50 :
+    - Gauche : 0 à img_width/2
+    - Droite : img_width/2 à img_width
+
+    Règle : Un keypoint à gauche doit matcher avec un point à gauche,
+    et un keypoint à droite doit matcher avec un point à droite.
+
+    Exception : Si le point est trop proche du centre (zone de tolérance),
+    on accepte un match de n'importe quel côté.
+
+    Args:
+        kp1: Keypoints de l'image 1
+        kp2: Keypoints de l'image 2
+        matches: Liste de DMatch
+        img_width: Largeur de l'image (ex: 1000)
+        center_tolerance_pixels: Distance en pixels autour du centre où la règle ne s'applique pas
+                                (ex: 100 signifie ±100 pixels du centre acceptent n'importe quel match)
+
+    Returns:
+        list: Matches filtrés respectant la cohérence spatiale gauche/droite
+    """
+    if len(matches) == 0:
+        return matches
+
+    center = img_width / 2.0
+    # Zone centrale : de (center - tolerance) à (center + tolerance)
+    center_left = center - center_tolerance_pixels
+    center_right = center + center_tolerance_pixels
+
+    filtered_matches = []
+
+    for m in matches:
+        pt1_x = kp1[m.queryIdx].pt[0]
+        pt2_x = kp2[m.trainIdx].pt[0]
+
+        # Vérifier si les points sont dans la zone centrale
+        pt1_in_center = center_left <= pt1_x <= center_right
+        pt2_in_center = center_left <= pt2_x <= center_right
+
+        # Si l'un des deux points est dans la zone centrale, accepter le match
+        if pt1_in_center or pt2_in_center:
+            filtered_matches.append(m)
+        else:
+            # Sinon, vérifier que les deux points sont du même côté (50/50 split)
+            side1 = pt1_x >= center  # True = droite, False = gauche
+            side2 = pt2_x >= center
+
+            if side1 == side2:
+                filtered_matches.append(m)
+
+    return filtered_matches
 
 def get_video_properties(video_path):
     cap = cv2.VideoCapture(video_path)
@@ -87,6 +142,10 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
 
     # Track consecutive failures to expand search
     consecutive_failures = 0
+
+    # Drift detection: track score trends
+    recent_scores = []
+    max_recent_scores = 10
 
     # Loop through Video 1
     v1_frame_idx = 0
@@ -162,27 +221,38 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                         velocity_variance = min(velocity_variance + 0.5, 1.0)
                         process_noise = min(process_noise * 1.5, 0.1)  # Increase adaptability temporarily
 
-        # Adaptive search window based on velocity confidence
-        # Higher confidence = smaller window, faster processing
+        # Search window size (fixed, no longer depends on velocity confidence)
         adaptive_window = search_window
-        if velocity_confidence > 0.7:
-            adaptive_window = int(search_window * 0.7)
-        elif velocity_confidence < 0.3:
-            adaptive_window = int(search_window * 1.3)
 
         # Expand search window on consecutive failures
         if consecutive_failures > 0:
             expansion_factor = 1.0 + (consecutive_failures * 0.5)
             adaptive_window = int(adaptive_window * min(expansion_factor, 3.0))
 
+        # Drift detection: if recent scores are declining, expand search aggressively
+        if len(recent_scores) >= 5:
+            avg_recent = np.mean(recent_scores[-5:])
+            avg_earlier = np.mean(recent_scores[:5]) if len(recent_scores) >= 10 else avg_recent
+
+            # If scores dropped significantly, we might be drifting
+            if avg_recent < avg_earlier * 0.5:
+                # Aggressive expansion to search wider area
+                adaptive_window = int(adaptive_window * 2.0)
+                # Also reset velocity confidence to be less strict
+                velocity_confidence = max(0.0, velocity_confidence - 0.3)
+
         # Predict center of search window based on frames elapsed since last match
         frames_since_last_match = v1_frame_idx - last_matched_v1_frame
         predicted_v2_frame = last_best_v2_frame + int(frames_since_last_match * estimated_velocity)
 
-        # Allow backward search but don't go below last matched position (monotonicity)
-        # Use smaller backward margin to encourage forward progress
-        backward_margin = max(5, int(adaptive_window * 0.05))
-        search_start = max(last_best_v2_frame, predicted_v2_frame - backward_margin)
+        # Allow backward search to correct drift errors
+        # Use larger backward margin (20% of window) to enable drift correction
+        backward_margin = max(10, int(adaptive_window * 0.20))
+
+        # Relaxed monotonicity: allow going back up to backward_margin frames
+        # This helps correct drift while still preventing wild jumps
+        min_search_start = max(0, last_best_v2_frame - backward_margin)
+        search_start = max(min_search_start, predicted_v2_frame - backward_margin)
 
         # Search ahead from predicted position
         search_end = search_start + adaptive_window
@@ -229,8 +299,26 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                         if m.distance < 50:
                             good_matches.append(m)
                 
-                # Filter by match count - use adaptive threshold based on detected features
-                min_matches = max(8, min(10, len(kp1) // 20))
+                # =================================================================
+                # SPATIAL CONSISTENCY FILTER (50/50 split with center tolerance)
+                # =================================================================
+                # Filter matches by left/right consistency:
+                # - Left (0 to img_width/2): points must match with left side
+                # - Right (img_width/2 to img_width): points must match with right side
+                # - Center tolerance zone: points near the center accept any match
+                # Example: for 1000px wide image, center tolerance is 400-600px
+                # =================================================================
+                img_width = frame2.shape[1]  # Width of the frame
+                # Center tolerance in pixels (±100px around center for typical 1920px image)
+                # For 1000px image, use ~50px
+                center_tolerance = int(img_width * 0.05)  # 5% of width on each side
+                good_matches = filter_matches_by_spatial_consistency(
+                    kp1, kp2, good_matches, img_width, center_tolerance_pixels=center_tolerance
+                )
+
+                # Filter by match count - use lower threshold to avoid missing frames
+                # Minimum 4 matches (required for RANSAC homography)
+                min_matches = max(4, min(6, len(kp1) // 30))
                 if len(good_matches) >= min_matches:
                     raw_candidates.append({
                         "idx": current_search_idx,
@@ -258,22 +346,35 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
         
         import math
 
-        # Exponential decay penalty based on distance
-        # f(dist) = e^(-k(dist - 1))
-        # k: sensitivity constant. Higher confidence -> higher sensitivity (harsher penalty)
-        base_k = 0.15
-        k = base_k * (0.5 + velocity_confidence)
+        # =================================================================
+        # EXPONENTIAL DECAY PENALTY: f(c) = e^(-k * (c - 1))
+        # =================================================================
+        # c : distance from expected position (in frames)
+        # k : sensitivity constant (higher = harsher penalty)
+        #
+        # When c = 1 (distance = 1 frame), f(1) = e^0 = 1 (no penalty)
+        # When c > 1, the penalty increases exponentially
+        #
+        # k is modulated by velocity_confidence:
+        # - High confidence -> higher k -> harsher penalty for distant frames
+        # - Low confidence  -> lower k  -> more lenient (we're less sure of position)
+        # =================================================================
+
+        base_k = 0.02  # Base sensitivity (gentle decay)
+        # k varies from base_k (when confidence=0) to 3*base_k (when confidence=1)
+        k = base_k * (1.0 + 2.0 * velocity_confidence)
 
         for cand in raw_candidates:
             idx = cand["idx"]
             good_matches = cand["matches"]
             kp2 = cand["kp2"]
 
-            dist = abs(idx - expected_pos)
+            # c = distance from expected position
+            c = abs(idx - expected_pos)
 
-            # Apply the exponential decay penalty: e^(-k * max(0, dist - 1))
-            # No penalty if distance <= 1.
-            penalty_multiplier = math.exp(-k * max(0, dist - 1))
+            # Apply exponential decay penalty: f(c) = e^(-k * max(0, c - 1))
+            # No penalty when c <= 1 (within 1 frame of expected position)
+            penalty_multiplier = math.exp(-k * max(0, c - 1))
 
             # Upper bound: even if all good matches are inliers
             max_possible_score = len(good_matches) * penalty_multiplier
@@ -323,11 +424,50 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
                 best_v2_idx = idx
                 best_match_raw_score = inlier_count # We return the raw score (inliers) for display
 
-        # Adaptive threshold based on match quality and velocity confidence
-        # The threshold is now positive because weighted is a multiplier on a positive score.
-        # e.g., We need at least 4 inliers after penalty to consider it a valid match.
-        acceptance_threshold = 4.0 * (0.5 + velocity_confidence)
-        
+        # Fixed acceptance threshold (lowered to avoid missing frames)
+        # Minimum weighted score required to accept a match
+        acceptance_threshold = 2.0
+
+        # Fallback: if no match found but we have candidates, take the best one
+        # This prevents gaps in the alignment
+        if best_v2_idx == -1 and len(raw_candidates) > 0:
+            # Find candidate with highest raw match count (ignoring penalty)
+            best_fallback = max(raw_candidates, key=lambda c: len(c["matches"]))
+            if len(best_fallback["matches"]) >= 4:
+                best_v2_idx = best_fallback["idx"]
+                best_weighted_score = len(best_fallback["matches"]) * 0.5  # Lower weight for fallback
+                best_match_raw_score = len(best_fallback["matches"])
+
+        # Temporal consistency check: validate that the match is reasonable
+        # based on recent history
+        if best_v2_idx != -1 and len(results) >= 3:
+            # Calculate expected position based on recent velocity
+            recent_velocities = []
+            for i in range(1, min(5, len(results))):
+                dv1 = results[-i]['v1_frame'] - results[-i-1]['v1_frame'] if i < len(results) else 0
+                dv2 = results[-i]['v2_frame'] - results[-i-1]['v2_frame'] if i < len(results) else 0
+                if dv1 > 0:
+                    recent_velocities.append(dv2 / dv1)
+
+            if recent_velocities:
+                median_velocity = np.median(recent_velocities)
+                expected_v2 = results[-1]['v2_frame'] + int((v1_frame_idx - results[-1]['v1_frame']) * median_velocity)
+
+                # If the match is too far from expected, check if there's a better candidate nearby
+                deviation = abs(best_v2_idx - expected_v2)
+                max_allowed_deviation = max(30, int(search_window * 0.3))
+
+                if deviation > max_allowed_deviation:
+                    # Look for a candidate closer to expected position
+                    for cand in raw_candidates:
+                        cand_deviation = abs(cand["idx"] - expected_v2)
+                        if cand_deviation < deviation and len(cand["matches"]) >= 4:
+                            # Found a better candidate, use it instead
+                            best_v2_idx = cand["idx"]
+                            best_match_raw_score = len(cand["matches"])
+                            best_weighted_score = best_match_raw_score * 0.8
+                            break
+
         if best_v2_idx != -1 and best_weighted_score >= acceptance_threshold:
             best_match_score = best_match_raw_score
 
@@ -343,6 +483,11 @@ def align_videos(video1_path, video2_path, algo_name="ORB", sample_rate=1, searc
             last_best_v2_frame = best_v2_idx
             last_matched_v1_frame = v1_frame_idx
             consecutive_failures = 0  # Reset on success
+
+            # Track scores for drift detection
+            recent_scores.append(best_match_score)
+            if len(recent_scores) > max_recent_scores:
+                recent_scores.pop(0)
         else:
             # print(f"Frame {v1_frame_idx}: No good match found.")
             consecutive_failures += 1

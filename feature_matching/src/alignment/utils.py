@@ -84,39 +84,41 @@ def filter_outliers_and_smooth(matches, window_size=5):
             pass
     
     # Additional pass: detect and correct systematic drift
-    # Look for gradual velocity changes that might indicate accumulated error
+    # Use linear regression to detect deviations from expected linear relationship
     if len(filtered) >= 10:
-        # Divide matches into segments and check for velocity drift
-        segment_size = len(filtered) // 3
-        if segment_size >= 3:
-            segments = [
-                filtered[0:segment_size],
-                filtered[segment_size:2*segment_size],
-                filtered[2*segment_size:]
-            ]
-            
-            segment_velocities = []
-            for segment in segments:
-                seg_vels = []
-                for i in range(1, len(segment)):
-                    dv1 = segment[i]['v1_frame'] - segment[i-1]['v1_frame']
-                    dv2 = segment[i]['v2_frame'] - segment[i-1]['v2_frame']
-                    if dv1 > 0:
-                        seg_vels.append(dv2 / dv1)
-                if seg_vels:
-                    segment_velocities.append(np.median(seg_vels))
-            
-            # If there's a consistent trend (drift), apply correction to later segments
-            if len(segment_velocities) == 3:
-                drift_trend = segment_velocities[-1] - segment_velocities[0]
-                # If drift is significant (>10% change), apply linear correction
-                if abs(drift_trend) > 0.1:
-                    target_velocity = segment_velocities[0]  # Use first segment as reference
-                    # Apply gradual correction to last segment
-                    correction_needed = drift_trend * segment_size
-                    for j, idx in enumerate(range(2*segment_size, len(filtered))):
-                        progress = j / segment_size if segment_size > 0 else 0
-                        filtered[idx]['v2_frame'] = int(filtered[idx]['v2_frame'] - progress * correction_needed)
+        v1_arr = np.array([m['v1_frame'] for m in filtered])
+        v2_arr = np.array([m['v2_frame'] for m in filtered])
+
+        # Fit linear regression: v2 = a * v1 + b
+        # This gives us the expected relationship
+        coeffs = np.polyfit(v1_arr, v2_arr, 1)
+        expected_v2 = np.polyval(coeffs, v1_arr)
+
+        # Calculate residuals (deviations from expected)
+        residuals = v2_arr - expected_v2
+
+        # Use robust statistics to find outliers
+        median_residual = np.median(residuals)
+        mad = np.median(np.abs(residuals - median_residual))
+
+        # Mark points with large residuals as potential drift errors
+        threshold = max(3.0 * mad, 5.0)  # At least 5 frames deviation
+
+        # Correct points with large residuals
+        corrected = []
+        for i, m in enumerate(filtered):
+            if abs(residuals[i]) > threshold:
+                # This point is likely wrong, use expected value instead
+                corrected_v2 = int(expected_v2[i])
+                corrected.append({
+                    'v1_frame': m['v1_frame'],
+                    'v2_frame': corrected_v2,
+                    'score': m['score'] * 0.5  # Mark as corrected with lower confidence
+                })
+            else:
+                corrected.append(m)
+
+        filtered = corrected
 
     # 2. Interpolation for missing frames (optional, if gaps are small)
     # Fill small gaps (< 5 frames) with linear interpolation

@@ -13,7 +13,7 @@ from combined_method.core import align_coarse_to_fine, align_fusion
 from feature_matching.src.alignment.utils import filter_outliers_and_smooth
 from feature_matching.src.alignment.visualization import plot_alignment, create_side_by_side_video, generate_html_report
 
-DATASET_DIR = "dataset"
+DATASET_DIR = "../dataset"
 ALGORITHMS = ["ORB", "BRISK", "AKAZE"]
 
 def get_available_plans():
