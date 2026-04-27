@@ -1,7 +1,8 @@
 import numpy as np
 from scipy.spatial.distance import cdist
 
-def compute_dtw(features1, features2, metric='euclidean', step_penalty=1.0):
+
+def compute_dtw(features1, features2, metric='euclidean', step_penalty=1.0, open_end=False):
     """
     Computes the Dynamic Time Warping (DTW) path and distance between two feature sequences.
     Adds a step penalty to non-diagonal moves to encourage 1:1 mapping (constant speed).
@@ -12,6 +13,9 @@ def compute_dtw(features1, features2, metric='euclidean', step_penalty=1.0):
         metric (str): Distance metric to use (default: 'euclidean').
         step_penalty (float): Penalty added to vertical/horizontal steps (insertions/deletions)
                               to reduce stuttering in alignment.
+        open_end (bool): If True, implements Open-End DTW (Subsequence DTW).
+                         The algorithm finds the optimal endpoint on the last row OR last column,
+                         allowing one video to end earlier geographically.
 
     Returns:
         path (list of tuples): Optimal warping path [(i, j), ...].
@@ -44,13 +48,34 @@ def compute_dtw(features1, features2, metric='euclidean', step_penalty=1.0):
             # Insertion (moving down) or Deletion (moving right) incurs penalty
             cost_insertion = acc_cost[i-1, j] + penalty
             cost_deletion = acc_cost[i, j-1] + penalty
-            cost_match = acc_cost[i-1, j-1] # Diagonal move
+            cost_match = acc_cost[i-1, j-1]  # Diagonal move
 
             acc_cost[i, j] = dist_matrix[i, j] + min(cost_insertion, cost_deletion, cost_match)
 
+    # Determine starting point for backtracking
+    if open_end:
+        # Open-End DTW: Find minimum cost on last row OR last column
+        # This allows one video to end earlier than the other
+
+        # Minimum on last row (video1 ends, video2 may end earlier)
+        last_row_min_j = np.argmin(acc_cost[n-1, :])
+        last_row_min_cost = acc_cost[n-1, last_row_min_j]
+
+        # Minimum on last column (video2 ends, video1 may end earlier)
+        last_col_min_i = np.argmin(acc_cost[:, m-1])
+        last_col_min_cost = acc_cost[last_col_min_i, m-1]
+
+        # Choose the endpoint with minimum cost
+        if last_row_min_cost <= last_col_min_cost:
+            i, j = n-1, last_row_min_j
+        else:
+            i, j = last_col_min_i, m-1
+    else:
+        # Standard DTW: Start from bottom-right corner
+        i, j = n-1, m-1
+
     # Backtrack to find the path
     path = []
-    i, j = n-1, m-1
     path.append((i, j))
 
     while i > 0 or j > 0:

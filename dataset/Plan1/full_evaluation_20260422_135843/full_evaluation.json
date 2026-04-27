@@ -1,0 +1,549 @@
+{
+  "plan": "Plan1",
+  "timestamp": "2026-04-22T14:50:05",
+  "video_v1": "/Users/julian/Documents/Master2/Q2/Master_Thesis/Projet/TSV/dataset/Plan1/video1.mp4",
+  "video_v2": "/Users/julian/Documents/Master2/Q2/Master_Thesis/Projet/TSV/dataset/Plan1/video2.mp4",
+  "n_v1_frames": 2715,
+  "n_v2_frames": 2836,
+  "config": {
+    "sample_rate": 0.1,
+    "cycle_sample_every": 30,
+    "offsets": [
+      1,
+      5,
+      30
+    ],
+    "random_seed": 42,
+    "skip_lpips": false
+  },
+  "results": {
+    "AKAZE": {
+      "real": {
+        "LPIPS": {
+          "mean": 0.7132516350444807,
+          "std": 0.015178499304624306,
+          "min": 0.6794509291648865,
+          "max": 0.7631320953369141,
+          "n": 269,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.37713926435994094,
+          "std": 0.03555632133890229,
+          "min": 0.26517874002456665,
+          "max": 0.4391179879506429,
+          "n": 269,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 1.4835164835164836,
+          "std": 2.0074730568314276,
+          "median": 1.0,
+          "max": 15,
+          "perfect_percent": 28.57142857142857,
+          "within_1_percent": 62.637362637362635,
+          "within_5_percent": 97.8021978021978,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "random": {
+        "LPIPS": {
+          "mean": 0.7131141066070525,
+          "std": 0.015042612294482637,
+          "min": 0.6697439551353455,
+          "max": 0.7562788128852844,
+          "n": 248,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.3834262114538941,
+          "std": 0.030237060243478064,
+          "min": 0.2960422933101654,
+          "max": 0.4404739836851756,
+          "n": 248,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 929.3516483516484,
+          "std": 659.694324379225,
+          "median": 822.0,
+          "max": 2542,
+          "perfect_percent": 0.0,
+          "within_1_percent": 0.0,
+          "within_5_percent": 0.0,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "linear": {
+        "LPIPS": {
+          "mean": 0.7150867090094835,
+          "std": 0.012389724434219762,
+          "min": 0.6750123500823975,
+          "max": 0.7485049962997437,
+          "n": 256,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.37528924678917974,
+          "std": 0.03355081887370053,
+          "min": 0.27079572280248004,
+          "max": 0.4443097909291585,
+          "n": 256,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 0.0,
+          "std": 0.0,
+          "median": 0.0,
+          "max": 0,
+          "perfect_percent": 100.0,
+          "within_1_percent": 100.0,
+          "within_5_percent": 100.0,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "offset_+1": {
+        "LPIPS": {
+          "mean": 0.71333753043391,
+          "std": 0.01507745669153565,
+          "min": 0.6796005368232727,
+          "max": 0.762360692024231,
+          "n": 269,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.3767198809091339,
+          "std": 0.03560316754202489,
+          "min": 0.2654356261094411,
+          "max": 0.4404790798823039,
+          "n": 269,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 1.7692307692307692,
+          "std": 2.6105320205395,
+          "median": 1.0,
+          "max": 19,
+          "perfect_percent": 24.175824175824175,
+          "within_1_percent": 58.24175824175825,
+          "within_5_percent": 96.7032967032967,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "offset_+5": {
+        "LPIPS": {
+          "mean": 0.7137812194327883,
+          "std": 0.014941431972701045,
+          "min": 0.6800640821456909,
+          "max": 0.7692298889160156,
+          "n": 269,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.37620405669992296,
+          "std": 0.035772849357197704,
+          "min": 0.2581743200620015,
+          "max": 0.43946607907613117,
+          "n": 269,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 5.65934065934066,
+          "std": 3.2453509612942,
+          "median": 5.0,
+          "max": 24,
+          "perfect_percent": 1.098901098901099,
+          "within_1_percent": 2.197802197802198,
+          "within_5_percent": 59.34065934065934,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "offset_+30": {
+        "LPIPS": {
+          "mean": 0.7145084838441756,
+          "std": 0.014203653973412039,
+          "min": 0.6833212375640869,
+          "max": 0.7610986828804016,
+          "n": 269,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.3763257811651502,
+          "std": 0.03562533705229046,
+          "min": 0.26653602719306946,
+          "max": 0.44044844309488934,
+          "n": 269,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 30.945054945054945,
+          "std": 5.559592516814969,
+          "median": 30.0,
+          "max": 57,
+          "perfect_percent": 0.0,
+          "within_1_percent": 0.0,
+          "within_5_percent": 0.0,
+          "n": 91,
+          "higher_is_better": false
+        }
+      }
+    },
+    "BRISK": {
+      "real": {
+        "LPIPS": {
+          "mean": 0.713408985402849,
+          "std": 0.015093508417020078,
+          "min": 0.6798388957977295,
+          "max": 0.7631320953369141,
+          "n": 270,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.3770011833052576,
+          "std": 0.035603585335772917,
+          "min": 0.2691594163576762,
+          "max": 0.4391179879506429,
+          "n": 270,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 1.4615384615384615,
+          "std": 1.320237177390739,
+          "median": 1.0,
+          "max": 6,
+          "perfect_percent": 26.373626373626376,
+          "within_1_percent": 59.34065934065934,
+          "within_5_percent": 98.9010989010989,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "random": {
+        "LPIPS": {
+          "mean": 0.7132002464738716,
+          "std": 0.015073539992022168,
+          "min": 0.6697439551353455,
+          "max": 0.7562788128852844,
+          "n": 249,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.3833946975439268,
+          "std": 0.03018036283861522,
+          "min": 0.2960422933101654,
+          "max": 0.4404739836851756,
+          "n": 249,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 929.3516483516484,
+          "std": 659.694324379225,
+          "median": 822.0,
+          "max": 2542,
+          "perfect_percent": 0.0,
+          "within_1_percent": 0.0,
+          "within_5_percent": 0.0,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "linear": {
+        "LPIPS": {
+          "mean": 0.7150552662430106,
+          "std": 0.01237582597468415,
+          "min": 0.6750123500823975,
+          "max": 0.7485049962997437,
+          "n": 257,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.37522079207090087,
+          "std": 0.0335033891633925,
+          "min": 0.27079572280248004,
+          "max": 0.4443097909291585,
+          "n": 257,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 0.0,
+          "std": 0.0,
+          "median": 0.0,
+          "max": 0,
+          "perfect_percent": 100.0,
+          "within_1_percent": 100.0,
+          "within_5_percent": 100.0,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "offset_+1": {
+        "LPIPS": {
+          "mean": 0.7134513080120086,
+          "std": 0.014981059572744449,
+          "min": 0.6798447370529175,
+          "max": 0.762360692024231,
+          "n": 270,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.3770110507806142,
+          "std": 0.03564466134678825,
+          "min": 0.2713436484336853,
+          "max": 0.4404790798823039,
+          "n": 270,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 1.8131868131868132,
+          "std": 1.6234009066039023,
+          "median": 1.0,
+          "max": 6,
+          "perfect_percent": 23.076923076923077,
+          "within_1_percent": 53.84615384615385,
+          "within_5_percent": 96.7032967032967,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "offset_+5": {
+        "LPIPS": {
+          "mean": 0.7136355170497188,
+          "std": 0.014871738689447234,
+          "min": 0.6807969808578491,
+          "max": 0.7692298889160156,
+          "n": 270,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.3765512564300019,
+          "std": 0.035506918669322575,
+          "min": 0.2570042709509532,
+          "max": 0.43924427032470703,
+          "n": 270,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 5.846153846153846,
+          "std": 2.745318000047773,
+          "median": 5.0,
+          "max": 19,
+          "perfect_percent": 0.0,
+          "within_1_percent": 2.197802197802198,
+          "within_5_percent": 53.84615384615385,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "offset_+30": {
+        "LPIPS": {
+          "mean": 0.7142692329706969,
+          "std": 0.014282906943882305,
+          "min": 0.6827205419540405,
+          "max": 0.7634934186935425,
+          "n": 270,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.37660763613235804,
+          "std": 0.03545065017518744,
+          "min": 0.26653602719306946,
+          "max": 0.44044844309488934,
+          "n": 270,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 31.46153846153846,
+          "std": 5.649677015581408,
+          "median": 30.0,
+          "max": 57,
+          "perfect_percent": 0.0,
+          "within_1_percent": 0.0,
+          "within_5_percent": 0.0,
+          "n": 91,
+          "higher_is_better": false
+        }
+      }
+    },
+    "ORB": {
+      "real": {
+        "LPIPS": {
+          "mean": 0.7133599925218461,
+          "std": 0.01509733238902683,
+          "min": 0.6788716316223145,
+          "max": 0.7644397020339966,
+          "n": 269,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.37695114057894236,
+          "std": 0.03546832129141455,
+          "min": 0.26517874002456665,
+          "max": 0.4391179879506429,
+          "n": 269,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 1.1538461538461537,
+          "std": 1.2218080362439354,
+          "median": 1.0,
+          "max": 6,
+          "perfect_percent": 32.967032967032964,
+          "within_1_percent": 71.42857142857143,
+          "within_5_percent": 98.9010989010989,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "random": {
+        "LPIPS": {
+          "mean": 0.7130718726304269,
+          "std": 0.01496744141972362,
+          "min": 0.6697439551353455,
+          "max": 0.7562788128852844,
+          "n": 248,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.38349562875365695,
+          "std": 0.030199180626405354,
+          "min": 0.2960422933101654,
+          "max": 0.4404739836851756,
+          "n": 248,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 929.3516483516484,
+          "std": 659.694324379225,
+          "median": 822.0,
+          "max": 2542,
+          "perfect_percent": 0.0,
+          "within_1_percent": 0.0,
+          "within_5_percent": 0.0,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "linear": {
+        "LPIPS": {
+          "mean": 0.7151017761789262,
+          "std": 0.012377536840018789,
+          "min": 0.6750123500823975,
+          "max": 0.7485049962997437,
+          "n": 256,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.3750624352833256,
+          "std": 0.03347263069136804,
+          "min": 0.27079572280248004,
+          "max": 0.4443097909291585,
+          "n": 256,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 0.0,
+          "std": 0.0,
+          "median": 0.0,
+          "max": 0,
+          "perfect_percent": 100.0,
+          "within_1_percent": 100.0,
+          "within_5_percent": 100.0,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "offset_+1": {
+        "LPIPS": {
+          "mean": 0.7134615610523295,
+          "std": 0.014983645942974685,
+          "min": 0.6794509291648865,
+          "max": 0.7635012269020081,
+          "n": 269,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.3770574094194462,
+          "std": 0.03546159932580504,
+          "min": 0.2654356261094411,
+          "max": 0.4404790798823039,
+          "n": 269,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 1.3626373626373627,
+          "std": 1.3466807670247478,
+          "median": 1.0,
+          "max": 8,
+          "perfect_percent": 23.076923076923077,
+          "within_1_percent": 69.23076923076923,
+          "within_5_percent": 98.9010989010989,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "offset_+5": {
+        "LPIPS": {
+          "mean": 0.7137222431849369,
+          "std": 0.014894485030840376,
+          "min": 0.6814415454864502,
+          "max": 0.7692298889160156,
+          "n": 269,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.37638199923945476,
+          "std": 0.035650867577814695,
+          "min": 0.2581743200620015,
+          "max": 0.43946607907613117,
+          "n": 269,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 5.208791208791209,
+          "std": 2.658250616669094,
+          "median": 5.0,
+          "max": 20,
+          "perfect_percent": 1.098901098901099,
+          "within_1_percent": 4.395604395604396,
+          "within_5_percent": 64.83516483516483,
+          "n": 91,
+          "higher_is_better": false
+        }
+      },
+      "offset_+30": {
+        "LPIPS": {
+          "mean": 0.714413497970893,
+          "std": 0.014159677860547207,
+          "min": 0.6827205419540405,
+          "max": 0.7617342472076416,
+          "n": 269,
+          "higher_is_better": false
+        },
+        "SSIM": {
+          "mean": 0.3764655335241977,
+          "std": 0.035440328401277324,
+          "min": 0.2646707197030385,
+          "max": 0.44044844309488934,
+          "n": 269,
+          "higher_is_better": true
+        },
+        "CYCLE": {
+          "mean": 30.87912087912088,
+          "std": 5.7432907150984,
+          "median": 30.0,
+          "max": 60,
+          "perfect_percent": 0.0,
+          "within_1_percent": 0.0,
+          "within_5_percent": 0.0,
+          "n": 91,
+          "higher_is_better": false
+        }
+      }
+    }
+  }
+}

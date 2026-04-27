@@ -83,3 +83,6 @@ dataset/**/alignment_*.csv
 dataset/**/*.html
 dataset/**/*.png
 dataset/**/*.mp4
+
+# Claude Code local agent state
+.claude/

@@ -1,0 +1,29 @@
+{
+  "total_matches": 2711,
+  "akaze_refined_count": 1801,
+  "akaze_refined_percent": 66.43305053485798,
+  "dtw_fallback_count": 910,
+  "dtw_fallback_percent": 33.56694946514202,
+  "monotonicity_violations": 0,
+  "monotonicity_score": 100.0,
+  "v1_frame_range": [
+    0,
+    2710
+  ],
+  "v2_frame_range": [
+    4,
+    2619
+  ],
+  "velocity_mean": 0.9649446494464945,
+  "velocity_std": 0.6614503079230105,
+  "velocity_range": [
+    0.0,
+    5.0
+  ],
+  "akaze_score_mean": 7.781787895613548,
+  "akaze_score_std": 3.6648337567655855,
+  "akaze_score_max": 25.0,
+  "akaze_correction_mean": -0.22931704608550804,
+  "akaze_correction_std": 1.532235895880784,
+  "akaze_correction_max": 9.0
+}

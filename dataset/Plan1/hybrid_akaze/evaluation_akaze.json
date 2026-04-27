@@ -1,0 +1,40 @@
+{
+  "plan": "Plan1",
+  "algorithm": "AKAZE",
+  "timestamp": "2026-04-24T13:10:09",
+  "video_v1": "/Users/julian/Documents/Master2/Q2/Master_Thesis/Projet/TSV/dataset/Plan1/video1.mp4",
+  "video_v2": "/Users/julian/Documents/Master2/Q2/Master_Thesis/Projet/TSV/dataset/Plan1/video2.mp4",
+  "sample_rate": 0.1,
+  "n_forward_matches": 2711,
+  "per_frame": {
+    "n_sampled": 269,
+    "sample_rate": 0.1,
+    "LPIPS": {
+      "mean": 0.7132516350444807,
+      "std": 0.015178499304624306,
+      "min": 0.6794509291648865,
+      "max": 0.7631320953369141,
+      "higher_is_better": false
+    },
+    "SSIM": {
+      "mean": 0.37713926435994094,
+      "std": 0.03555632133890229,
+      "min": 0.26517874002456665,
+      "max": 0.4391179879506429,
+      "higher_is_better": true
+    }
+  },
+  "cycle_consistency": {
+    "n_sampled": 91,
+    "sample_every": 30,
+    "mean_error": 1.4835164835164836,
+    "std_error": 2.0074730568314276,
+    "median_error": 1.0,
+    "max_error": 15,
+    "perfect_count": 26,
+    "perfect_percent": 28.57142857142857,
+    "within_1_percent": 62.637362637362635,
+    "within_5_percent": 97.8021978021978,
+    "higher_is_better": false
+  }
+}
