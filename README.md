@@ -1,72 +1,113 @@
-# TSV
-Master Thesis job - Image alignment on rail track
+# TSV — Temporal Synchronization of Videos
 
-## Description
+Master thesis project: temporal alignment of two rail-track videos filmed at
+different speeds.
 
-This project implements three different algorithms for image alignment on rail tracks:
-- **ORB** (Oriented FAST and Rotated BRIEF)
-- **BRISK** (Binary Robust Invariant Scalable Keypoints)
-- **AKAZE** (Accelerated-KAZE)
+## Algorithms
 
-The goal is to align two videos of the same track taken at different speeds.
+Three generations of alignment algorithm, each in its own package:
 
-## Project Structure
+| Package | Approach | Status |
+|---|---|---|
+| `feature_matching/` | Greedy frame-by-frame ORB / BRISK / AKAZE + Kalman filter | Baseline |
+| `new_method/`       | DTW skeleton over dense optical flow features (open-end mode) | Backbone |
+| `combined_method/`  | Hybrid coarse-to-fine — DTW (macro) + feature matching (micro) | **Current** |
 
-```
-.
-├── data/               # Directory containing Plan folders (videos)
-├── scripts/            # Executable scripts
-│   ├── run_alignment.py      # Main entry point
-│   └── generate_test_data.py # Helper to create dummy videos
-├── src/                # Source code
-│   └── alignment/      # Core logic package
-│       ├── algorithms/ # ORB, BRISK, AKAZE implementations
-│       ├── core.py     # Alignment logic
-│       ├── utils.py    # Post-processing
-│       └── visualization.py
-└── requirements.txt    # Dependencies
-```
+## Setup
 
-## Installation
-
-1. Install Python dependencies:
 ```bash
+cd Projet/TSV
 pip install -r requirements.txt
 ```
 
-## Usage
+Dependencies: `opencv-python`, `numpy`, `matplotlib`, `scipy`. The combined
+method's evaluation suite additionally uses `lpips` (PyTorch).
 
-### 1. Prepare Data
-Place your videos in the `data/` directory using the following structure:
+## Data layout
+
 ```
-data/
-  Plan1/
-    video1.mp4
-    video2.mp4
-  Plan2/
-    ...
+Projet/TSV/dataset/
+└── Plan1/
+    ├── video1.mp4    # reference (J-1)
+    ├── video2.mp4    # target (J)
+    └── hybrid_<algo>/  # auto-created outputs
 ```
 
-If you don't have data, you can generate a test plan:
+## Running the alignment
+
+### Recommended (hybrid coarse-to-fine)
+
 ```bash
-python scripts/generate_test_data.py
+cd Projet/TSV
+python combined_method/run_alignment_hybrid.py            # interactive
+python combined_method/run_alignment_hybrid.py Plan1      # one plan
+python combined_method/run_alignment_hybrid.py all AKAZE  # all plans, AKAZE
 ```
 
-### 2. Run Alignment
-Execute the main script:
+Speed / quality knobs:
+
 ```bash
-python scripts/run_alignment.py
+# Faster, less precise
+python combined_method/run_alignment_hybrid.py Plan1 \
+    --dtw-sample-rate 10 --feature-sample-rate 5 --search-window 8
+
+# Slower, more precise
+python combined_method/run_alignment_hybrid.py Plan1 \
+    --dtw-sample-rate 2  --feature-sample-rate 1 --search-window 15
 ```
-Follow the interactive prompts to select a plan, or run with arguments:
+
+### Feature-matching only (baseline)
+
 ```bash
-python scripts/run_alignment.py PlanTest
+python feature_matching/scripts/run_alignment.py            # interactive
+python feature_matching/scripts/run_alignment.py PlanTest   # one plan
+python feature_matching/scripts/generate_test_data.py       # dummy videos
 ```
 
-## Outputs
+## Evaluating an alignment
 
-For each algorithm (ORB, BRISK, AKAZE), the script generates:
-- `alignment_<algo>_raw.csv`: Raw alignment data.
-- `alignment_<algo>_clean.csv`: Post-processed (smoothed) alignment data.
-- `plot_<algo>.png`: Visualization of the alignment path.
-- `comparison_<algo>.mp4`: Side-by-side video comparison.
-- `report_<algo>.html`: Summary report.
+The combined method ships with a perceptual + cycle-consistency evaluation
+suite under `combined_method/evaluation/`.
+
+```bash
+# Evaluate a single cached alignment
+python combined_method/run_evaluation.py Plan1 --algorithm AKAZE --metrics all
+
+# Full sweep: all algos × all metrics × all baselines (random, linear, offset±k)
+python combined_method/run_full_evaluation.py Plan1
+```
+
+Metrics:
+- **SSIM** — structural similarity (Wang 2004), with photometric normalization
+  enabled by default to isolate alignment quality from illumination.
+- **LPIPS** — learned perceptual similarity (Zhang 2018), AlexNet by default,
+  VGG available for higher discrimination.
+- **Cycle consistency** — round-trip frame error `|i − g(f(i))|`, fully
+  content-agnostic.
+
+See `SSIM_LPIPS_Analysis.pdf` for the design rationale of the photometric
+normalization and ROI options.
+
+## Tests
+
+```bash
+cd Projet/TSV
+python -m pytest new_method/tests/
+```
+
+## Project layout
+
+```
+Projet/TSV/
+├── combined_method/        # current pipeline (hybrid)
+│   ├── hybrid_alignment.py
+│   ├── visualization.py
+│   ├── evaluation/         # SSIM, LPIPS, cycle, baselines
+│   ├── run_alignment_hybrid.py
+│   ├── run_evaluation.py
+│   └── run_full_evaluation.py
+├── new_method/             # DTW backbone (library + tests)
+├── feature_matching/       # baseline (greedy + Kalman)
+├── dataset/                # input videos + per-plan outputs
+└── requirements.txt
+```

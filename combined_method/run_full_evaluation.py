@@ -29,7 +29,6 @@ Usage:
 """
 
 import argparse
-import csv
 import json
 import os
 import sys
@@ -56,6 +55,12 @@ from combined_method.evaluation import (
     linear_alignment,
     offset_alignment,
 )
+from combined_method._cli_helpers import (
+    get_available_plans as _list_plans,
+    select_plan as _pick_plan,
+    load_matches_from_csv,
+    save_matches_to_csv,
+)
 
 DATASET_DIR = os.path.join(project_root, "dataset")
 FORWARD_CSV = "alignment_results.csv"
@@ -63,45 +68,15 @@ BACKWARD_CSV = "alignment_results_backward.csv"
 
 
 # =============================================================================
-# CSV helpers
-# =============================================================================
-
-def load_matches_from_csv(csv_path: str) -> list:
-    matches = []
-    with open(csv_path, newline="") as f:
-        for row in csv.DictReader(f):
-            matches.append({"v1_frame": int(row["v1_frame"]), "v2_frame": int(row["v2_frame"])})
-    return matches
-
-
-def save_matches_to_csv(matches: list, csv_path: str):
-    with open(csv_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["v1_frame", "v2_frame"])
-        w.writeheader()
-        for m in matches:
-            w.writerow({"v1_frame": int(m["v1_frame"]), "v2_frame": int(m["v2_frame"])})
-
-
-# =============================================================================
-# Discovery / interactive
+# Discovery / interactive (thin wrappers over the shared helpers)
 # =============================================================================
 
 def get_available_plans():
-    if not os.path.exists(DATASET_DIR):
-        return []
-    return sorted(d for d in os.listdir(DATASET_DIR)
-                  if os.path.isdir(os.path.join(DATASET_DIR, d)) and d.lower().startswith("plan"))
+    return _list_plans(DATASET_DIR)
 
 
 def select_plan(plans):
-    print("\n📁 Available plans:")
-    for i, p in enumerate(plans, 1):
-        print(f"   {i}. {p}")
-    while True:
-        choice = input(f"\n➜ Select plan (1-{len(plans)}) [default: 1]: ").strip() or "1"
-        if choice.isdigit() and 1 <= int(choice) <= len(plans):
-            return plans[int(choice) - 1]
-        print("   Invalid choice.")
+    return _pick_plan(plans, allow_all=False)[0]
 
 
 # =============================================================================

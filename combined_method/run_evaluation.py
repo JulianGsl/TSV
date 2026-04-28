@@ -25,7 +25,6 @@ Usage (CLI):
 """
 
 import argparse
-import csv
 import json
 import os
 import sys
@@ -43,6 +42,13 @@ from combined_method.evaluation import (
     compute_cycle_consistency,
     SSIMMetric,
 )
+from combined_method._cli_helpers import (
+    get_available_plans as _list_plans,
+    select_plan as _pick_plan,
+    select_algorithm as _pick_algorithm,
+    load_matches_from_csv,
+    save_matches_to_csv,
+)
 
 # Resolve dataset path relative to this script (TSV/dataset),
 # so it works regardless of the caller's cwd.
@@ -54,41 +60,14 @@ BACKWARD_CSV = "alignment_results_backward.csv"
 
 
 # ---------------------------------------------------------------------------
-# Data loading (no algorithm reruns)
-# ---------------------------------------------------------------------------
-
-def load_matches_from_csv(csv_path: str) -> list:
-    """Load alignment matches from any CSV that has v1_frame and v2_frame columns."""
-    matches = []
-    with open(csv_path, newline="") as f:
-        for row in csv.DictReader(f):
-            matches.append({
-                "v1_frame": int(row["v1_frame"]),
-                "v2_frame": int(row["v2_frame"]),
-            })
-    return matches
-
-
-def save_matches_to_csv(matches: list, csv_path: str):
-    """Save a minimal v1_frame/v2_frame CSV (used to cache the backward alignment)."""
-    with open(csv_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["v1_frame", "v2_frame"])
-        w.writeheader()
-        for m in matches:
-            w.writerow({"v1_frame": int(m["v1_frame"]), "v2_frame": int(m["v2_frame"])})
-
-
-# ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
 
 def get_available_plans():
-    if not os.path.exists(DATASET_DIR):
-        print(f"⚠️  Dataset directory '{DATASET_DIR}' not found.")
-        return []
-    plans = [d for d in os.listdir(DATASET_DIR)
-             if os.path.isdir(os.path.join(DATASET_DIR, d)) and d.lower().startswith("plan")]
-    return sorted(plans)
+    plans = _list_plans(DATASET_DIR)
+    if not plans:
+        print(f"⚠️  Dataset directory '{DATASET_DIR}' not found or empty.")
+    return plans
 
 
 def output_dir_for(plan: str, algorithm: str) -> str:
@@ -96,34 +75,15 @@ def output_dir_for(plan: str, algorithm: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Interactive selectors
+# Interactive selectors (thin wrappers over the shared helpers)
 # ---------------------------------------------------------------------------
 
 def select_plan(plans):
-    print("\n📁 Available plans:")
-    for i, p in enumerate(plans, 1):
-        print(f"   {i}. {p}")
-    print(f"   {len(plans) + 1}. all")
-    while True:
-        choice = input(f"\n➜ Select plan (1-{len(plans) + 1}) [default: 1]: ").strip() or "1"
-        if choice.isdigit():
-            n = int(choice)
-            if 1 <= n <= len(plans):
-                return [plans[n - 1]]
-            if n == len(plans) + 1:
-                return plans
-        print("   Invalid choice.")
+    return _pick_plan(plans, allow_all=True)
 
 
 def select_algorithm():
-    print("\n🔧 Feature matching algorithm:")
-    for i, algo in enumerate(SUPPORTED_ALGORITHMS, 1):
-        print(f"   {i}. {algo}")
-    while True:
-        choice = input(f"\n➜ Select algorithm (1-{len(SUPPORTED_ALGORITHMS)}) [default: 1 AKAZE]: ").strip() or "1"
-        if choice.isdigit() and 1 <= int(choice) <= len(SUPPORTED_ALGORITHMS):
-            return SUPPORTED_ALGORITHMS[int(choice) - 1]
-        print("   Invalid choice.")
+    return _pick_algorithm(SUPPORTED_ALGORITHMS)
 
 
 def select_metrics():

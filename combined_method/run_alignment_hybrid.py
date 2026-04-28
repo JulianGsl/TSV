@@ -10,6 +10,7 @@ Supports multiple feature matching algorithms: AKAZE, BRISK, ORB
 This mirrors the feature_matching workflow for consistency.
 """
 
+import argparse
 import sys
 import os
 import time
@@ -35,26 +36,22 @@ from combined_method.visualization import (
     save_alignment_csv,
     save_metrics_json
 )
+from combined_method._cli_helpers import get_available_plans as _list_plans
 from new_method.feature_extraction import VideoFeatureExtractor
 from new_method.dtw_alignment import compute_dtw
 import numpy as np
 
-# Dataset directory relative to current working directory
-DATASET_DIR = "../dataset"
+# Dataset path is resolved relative to the script (TSV/dataset),
+# so the script works regardless of the caller's cwd.
+DATASET_DIR = os.path.join(project_root, "dataset")
 
 
 def get_available_plans():
     """Returns a list of Plan directories in the dataset folder."""
-    if not os.path.exists(DATASET_DIR):
-        print(f"Warning: Dataset directory '{DATASET_DIR}' not found.")
-        return []
-
-    plans = []
-    for d in os.listdir(DATASET_DIR):
-        path = os.path.join(DATASET_DIR, d)
-        if os.path.isdir(path) and d.lower().startswith("plan"):
-            plans.append(d)
-    return sorted(plans)
+    plans = _list_plans(DATASET_DIR)
+    if not plans:
+        print(f"Warning: Dataset directory '{DATASET_DIR}' not found or empty.")
+    return plans
 
 
 def select_algorithm():
@@ -64,29 +61,26 @@ def select_algorithm():
     Returns:
         str: Selected algorithm name ("AKAZE", "BRISK", or "ORB")
     """
+    descriptions = {
+        "AKAZE": "Recommended - Good balance of speed and accuracy",
+        "BRISK": "Fast - Good for real-time applications",
+        "ORB":   "Fastest - More features, less precise",
+    }
     print("\n🔧 Select Feature Matching Algorithm:")
     for i, algo in enumerate(SUPPORTED_ALGORITHMS, 1):
-        desc = {
-            "AKAZE": "Recommended - Good balance of speed and accuracy",
-            "BRISK": "Fast - Good for real-time applications",
-            "ORB": "Fastest - More features, less precise"
-        }
-        print(f"   {i}. {algo} - {desc.get(algo, '')}")
+        print(f"   {i}. {algo} - {descriptions.get(algo, '')}")
 
     while True:
-        choice = input("\n➜ Select algorithm (1-3) [default: 1 AKAZE]: ").strip()
-
-        if choice == "" or choice == "1":
-            return "AKAZE"
-        elif choice == "2":
-            return "BRISK"
-        elif choice == "3":
-            return "ORB"
-        else:
-            print("Invalid choice. Please enter 1, 2, or 3.")
+        choice = input(f"\n➜ Select algorithm (1-{len(SUPPORTED_ALGORITHMS)}) [default: 1 AKAZE]: ").strip() or "1"
+        if choice.isdigit() and 1 <= int(choice) <= len(SUPPORTED_ALGORITHMS):
+            return SUPPORTED_ALGORITHMS[int(choice) - 1]
+        print(f"Invalid choice. Please enter 1-{len(SUPPORTED_ALGORITHMS)}.")
 
 
-def process_plan_hybrid(plan_name, algorithm="AKAZE"):
+def process_plan_hybrid(plan_name, algorithm="AKAZE",
+                        dtw_sample_rate=5, feature_sample_rate=1,
+                        search_window=10, min_inliers=4,
+                        dtw_step_penalty=1.5):
     """
     Runs hybrid alignment on the specified plan.
 
@@ -130,11 +124,11 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE"):
 
     aligner = HybridAligner(
         algorithm=algorithm,
-        dtw_sample_rate=5,
-        dtw_step_penalty=1.5,
-        feature_sample_rate=1,
-        search_window=10,
-        min_inliers_threshold=4,
+        dtw_sample_rate=dtw_sample_rate,
+        dtw_step_penalty=dtw_step_penalty,
+        feature_sample_rate=feature_sample_rate,
+        search_window=search_window,
+        min_inliers_threshold=min_inliers,
         verbose=True
     )
 
@@ -151,7 +145,7 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE"):
 
     extractor = VideoFeatureExtractor(
         resize_dim=(320, 240),
-        sample_rate=5,
+        sample_rate=dtw_sample_rate,
         ignore_sky=True
     )
 
@@ -165,7 +159,7 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE"):
 
     path, cost_matrix = compute_dtw(
         features1_norm, features2_norm,
-        step_penalty=1.5,
+        step_penalty=dtw_step_penalty,
         open_end=True
     )
 
@@ -270,10 +264,11 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE"):
 
     config = {
         "algorithm": algorithm,
-        "dtw_sample_rate": 5,
-        "feature_sample_rate": 1,
-        "search_window": 10,
-        "min_inliers": 4,
+        "dtw_sample_rate": dtw_sample_rate,
+        "feature_sample_rate": feature_sample_rate,
+        "search_window": search_window,
+        "min_inliers": min_inliers,
+        "dtw_step_penalty": dtw_step_penalty,
     }
 
     report_path = generate_html_report(
@@ -309,96 +304,96 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE"):
     print(f"\n✓ Open report: file://{os.path.abspath(report_path)}")
 
 
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Hybrid video alignment (DTW + AKAZE/BRISK/ORB).",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument("plan", nargs="?",
+                   help="Plan name (e.g. Plan1) or 'all'. Omit for interactive mode.")
+    p.add_argument("algorithm", nargs="?", choices=SUPPORTED_ALGORITHMS, default=None,
+                   help="Feature matching algorithm. Asked interactively if omitted.")
+    p.add_argument("--dtw-sample-rate", type=int, default=5,
+                   help="Sample every Nth frame for the DTW coarse phase (higher = faster).")
+    p.add_argument("--feature-sample-rate", "--akaze-sample-rate", dest="feature_sample_rate",
+                   type=int, default=1,
+                   help="Sample every Nth frame for the fine refinement phase.")
+    p.add_argument("--search-window", type=int, default=10,
+                   help="Strict ± window (in frames) around the DTW prediction.")
+    p.add_argument("--min-inliers", type=int, default=4,
+                   help="Minimum RANSAC inliers required to accept a fine-phase match.")
+    p.add_argument("--dtw-step-penalty", type=float, default=1.5,
+                   help="DTW step penalty (higher = stronger diagonal preference).")
+    return p.parse_args()
+
+
 def main():
-    """Main entry point with interactive plan and algorithm selection."""
+    """Main entry point with interactive plan/algorithm selection or CLI args."""
+    args = parse_args()
+
     print("=" * 70)
     print("HYBRID VIDEO ALIGNMENT (Coarse-to-Fine DTW + Feature Matching)")
-    print("Supports: AKAZE, BRISK, ORB")
+    print(f"Supports: {', '.join(SUPPORTED_ALGORITHMS)}")
     print("=" * 70)
 
     plans = get_available_plans()
-
     if not plans:
         print(f"\nERROR: No plans found in '{DATASET_DIR}'")
-        print(f"Please ensure dataset structure:")
-        print(f"  {DATASET_DIR}/")
-        print(f"  ├── Plan1/")
-        print(f"  │   ├── video1.mp4")
-        print(f"  │   └── video2.mp4")
-        print(f"  ├── Plan2/")
-        print(f"  │   ├── video1.mp4")
-        print(f"  │   └── video2.mp4")
-        print(f"  └── ...")
+        print(f"Expected layout:  {DATASET_DIR}/Plan1/{{video1,video2}}.mp4")
         return
 
-    # Argument handling for automation
-    selected_plans = []
-    selected_algorithm = "AKAZE"  # Default
-
-    if len(sys.argv) > 1:
-        arg = sys.argv[1]
-        if arg.lower() == "all":
+    # ------- Plan selection ---------------------------------------------
+    if args.plan:
+        if args.plan.lower() == "all":
             selected_plans = plans
-        elif arg in plans:
-            selected_plans = [arg]
+        elif args.plan in plans:
+            selected_plans = [args.plan]
         else:
-            print(f"\nERROR: Plan '{arg}' not found.")
+            print(f"\nERROR: Plan '{args.plan}' not found.")
             print(f"Available plans: {', '.join(plans)}")
             return
-
-        # Check for algorithm argument
-        if len(sys.argv) > 2:
-            algo_arg = sys.argv[2].upper()
-            if algo_arg in SUPPORTED_ALGORITHMS:
-                selected_algorithm = algo_arg
-            else:
-                print(f"WARNING: Unknown algorithm '{sys.argv[2]}'. Using AKAZE.")
     else:
-        # Interactive mode - Select Plan
         print("\n📁 Available Plans:")
         for i, plan in enumerate(plans, 1):
             print(f"   {i}. {plan}")
-
         print("\n🎛️  Options:")
         print("   a. Process All")
         print("   q. Quit")
-
         choice = input("\n➜ Select plan number or option: ").strip().lower()
-
         if choice == "a":
             selected_plans = plans
         elif choice == "q":
             print("\nExiting.")
             return
-        elif choice.isdigit():
-            idx = int(choice) - 1
-            if 0 <= idx < len(plans):
-                selected_plans = [plans[idx]]
-            else:
-                print("ERROR: Invalid selection.")
-                return
+        elif choice.isdigit() and 1 <= int(choice) <= len(plans):
+            selected_plans = [plans[int(choice) - 1]]
         else:
             print("ERROR: Invalid input.")
             return
 
-        # Interactive mode - Select Algorithm
-        selected_algorithm = select_algorithm()
+    # ------- Algorithm selection ----------------------------------------
+    selected_algorithm = args.algorithm or select_algorithm()
 
-    # Process selected plans
+    # ------- Run --------------------------------------------------------
     total_start = time.time()
-
     for i, plan in enumerate(selected_plans, 1):
         print(f"\n{'─' * 70}")
         print(f"[{i}/{len(selected_plans)}] {plan}")
         print(f"{'─' * 70}")
-
-        process_plan_hybrid(plan, algorithm=selected_algorithm)
+        process_plan_hybrid(
+            plan,
+            algorithm=selected_algorithm,
+            dtw_sample_rate=args.dtw_sample_rate,
+            feature_sample_rate=args.feature_sample_rate,
+            search_window=args.search_window,
+            min_inliers=args.min_inliers,
+            dtw_step_penalty=args.dtw_step_penalty,
+        )
 
     total_elapsed = time.time() - total_start
-
     print(f"\n{'=' * 70}")
     print(f"ALL PROCESSING COMPLETE")
-    print(f"Total time: {total_elapsed:.1f}s ({total_elapsed/60:.1f}m)")
+    print(f"Total time: {total_elapsed:.1f}s ({total_elapsed / 60:.1f}m)")
     print(f"{'=' * 70}")
 
 

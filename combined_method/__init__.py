@@ -2,13 +2,17 @@
 Combined Method Module - Coarse-to-Fine Video Alignment
 
 This module combines the robustness of DTW-based optical flow alignment (macro)
-with the precision of AKAZE feature matching (micro) for optimal video alignment.
+with the precision of AKAZE/BRISK/ORB feature matching (micro).
 
 Main components:
-- HybridAligner: Main alignment class
-- align_videos_hybrid: Convenience function for alignment
-- visualization: Comprehensive output generation
-- run_hybrid: Full pipeline script
+- HybridAligner / align_videos_hybrid : alignment engine (hybrid_alignment.py)
+- visualization                       : plots, videos, HTML report
+- evaluation/                         : SSIM, LPIPS, cycle consistency, baselines
+
+Entry-point scripts:
+- run_alignment_hybrid.py  : run the alignment (interactive or CLI)
+- run_evaluation.py        : evaluate a cached alignment (LPIPS / SSIM / cycle)
+- run_full_evaluation.py   : evaluate all algos × all metrics × all baselines
 """
 
 from .hybrid_alignment import align_videos_hybrid, HybridAligner

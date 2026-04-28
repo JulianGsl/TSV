@@ -1,177 +1,125 @@
-# Hybrid Video Alignment (Coarse-to-Fine: DTW + AKAZE)
+# Hybrid Video Alignment (Coarse-to-Fine: DTW + Feature Matching)
 
-Alignement temporel de vidéos de trains utilisant une approche coarse-to-fine combinant:
-- **Phase Macro (DTW)** : Alignement robuste basé sur le flux optique
-- **Phase Micro (AKAZE)** : Raffinement précis par détection de features
-- **Phase Fallback** : Filet de sécurité pour les zones difficiles
+Temporal alignment of rail-track videos using a coarse-to-fine pipeline:
+- **Macro phase (DTW)** — robust global alignment over dense optical flow
+- **Micro phase (AKAZE / BRISK / ORB)** — local refinement via feature matching
+- **Fallback** — DTW prediction is kept whenever RANSAC inliers fall below `min_inliers`
 
-## Installation
+The strict `±search_window` bound around the DTW prediction is **never** widened —
+this is intentional to prevent drift accumulation.
 
-```bash
-cd /Users/julian/Documents/Master2/Q2/Master_Thesis/Projet/TSV
-```
-
-## Structure du Dataset
+## Dataset layout
 
 ```
 dataset/
-├── Plan1/
-│   ├── video1.mp4  (vidéo J-1, référence)
-│   ├── video2.mp4  (vidéo J, cible)
-│   └── hybrid/     (résultats créés automatiquement)
-├── Plan2/
-│   ├── video1.mp4
-│   ├── video2.mp4
-│   └── hybrid/
-└── Plan3/
-    ├── video1.mp4
-    ├── video2.mp4
-    └── hybrid/
+└── Plan1/
+    ├── video1.mp4         # reference (J-1)
+    ├── video2.mp4         # target (J)
+    └── hybrid_<algo>/     # auto-created outputs (one folder per algorithm)
 ```
 
-## Utilisation
+## Running the alignment
 
-### Mode Interactif (Recommandé)
+### Interactive
 
 ```bash
-# Lance le script interactif
+cd Projet/TSV
 python combined_method/run_alignment_hybrid.py
 ```
 
-Affiche les plans disponibles et demande de sélectionner :
-
-```
-======================================================================
-HYBRID VIDEO ALIGNMENT (Coarse-to-Fine DTW + AKAZE)
-======================================================================
-
-📁 Available Plans:
-   1. Plan1
-   2. Plan2
-   3. PlanTest
-
-🎛️  Options:
-   a. Process All
-   q. Quit
-
-➜ Select plan number or option:
-```
-
-### Mode Automatisé
+### CLI
 
 ```bash
-# Traiter un plan spécifique
+# One plan, default algorithm (AKAZE)
 python combined_method/run_alignment_hybrid.py Plan1
 
-# Traiter tous les plans
-python combined_method/run_alignment_hybrid.py all
+# All plans, BRISK
+python combined_method/run_alignment_hybrid.py all BRISK
+
+# Speed / quality knobs
+python combined_method/run_alignment_hybrid.py Plan1 \
+    --dtw-sample-rate 2 --feature-sample-rate 1 --search-window 15   # slower, more precise
+
+python combined_method/run_alignment_hybrid.py Plan1 \
+    --dtw-sample-rate 10 --feature-sample-rate 5 --search-window 8   # faster, less precise
 ```
 
-## Outputs
+Available flags: `--dtw-sample-rate`, `--feature-sample-rate` (alias
+`--akaze-sample-rate`), `--search-window`, `--min-inliers`,
+`--dtw-step-penalty`.
 
-Pour chaque plan, le dossier `dataset/Plan1/hybrid/` contient :
+## Outputs (per plan, per algorithm)
 
-### 📹 Vidéos alignées (3 modes)
-- `aligned_simple.mp4` - Side-by-side simple (le plus rapide)
-- `aligned_features.mp4` - Avec keypoints AKAZE affichés
-- `aligned_flow.mp4` - Avec flux optique visualisé
+`dataset/Plan1/hybrid_akaze/` (or `hybrid_brisk/`, `hybrid_orb/`):
 
-### 📊 Visualisations
-- `alignment_scatter.png` - Graphique V1 vs V2 frames
-- `alignment_difference.png` - Corrections AKAZE par rapport au DTW
-- `source_distribution.png` - Pie chart + qualité AKAZE
-- `velocity_analysis.png` - Vitesse relative entre vidéos
-- `dtw_cost_matrix.png` - Heatmap DTW avec chemin optimal
+**Videos**
+- `aligned_simple.mp4` — side-by-side
+- `aligned_features.mp4` — keypoint overlay
+- `aligned_flow.mp4` — optical flow overlay
 
-### 📈 Données structurées
-- `alignment_results.csv` - Correspondances frame par frame
-- `metrics.json` - Métriques de qualité
+**Plots**
+- `alignment_scatter.png`, `alignment_difference.png`,
+  `source_distribution.png`, `velocity_analysis.png`,
+  `dtw_cost_matrix.png`
 
-### 📄 Rapport
-- `report.html` - Rapport HTML complet (ouvrir dans un navigateur)
+**Data**
+- `alignment_results.csv` — forward V1 → V2
+- `alignment_results_backward.csv` — cached after first cycle-consistency run
+- `metrics.json` — alignment metrics
+- `evaluation.json` — perceptual / cycle metrics (after `run_evaluation.py`)
+- `report.html` — combined HTML report
 
-## Métriques clés
+## Evaluating an alignment
 
-| Métrique | Description |
-|----------|-------------|
-| **Total matches** | Nombre total de correspondances trouvées |
-| **AKAZE refined %** | % de frames affinées par AKAZE (bon signe !) |
-| **DTW fallback %** | % où DTW a assuré la sécurité |
-| **Monotonicity score** | % de respect de progression monotone (progression normale) |
-| **Velocity ratio** | Rapport de vitesse moyen (1.0 = même vitesse) |
-| **Mean AKAZE inliers** | Qualité moyenne des matchs AKAZE |
-| **Max correction** | Plus grande correction apportée par AKAZE |
+```bash
+python combined_method/run_evaluation.py Plan1 --algorithm AKAZE --metrics all
+python combined_method/run_full_evaluation.py Plan1   # all algos × all metrics × all baselines
+```
 
-## API Python
+See `../SSIM_LPIPS_Analysis.pdf` for the rationale behind photometric
+normalization and ROI options on the perceptual metrics.
+
+## Python API
 
 ```python
 from combined_method import align_videos_hybrid
 
-# Utilisation simple
-results = align_videos_hybrid(
-    "video1.mp4",
-    "video2.mp4",
-    dtw_sample_rate=5,      # Extraction rapide (1 frame sur 5)
-    akaze_sample_rate=1,    # Raffinement sur toutes les frames
-    search_window=10,       # Fenêtre stricte ±10 frames
-    min_inliers=4           # Seuil de fallback
+matches = align_videos_hybrid(
+    "video1.mp4", "video2.mp4",
+    algorithm="AKAZE",
+    dtw_sample_rate=5,
+    feature_sample_rate=1,
+    search_window=10,
+    min_inliers=4,
 )
 
-# Résultat: liste de dictionnaires
-for match in results:
-    print(f"V1[{match['v1_frame']}] -> V2[{match['v2_frame']}] "
-          f"(source: {match['source']}, inliers: {match['score']})")
+for m in matches:
+    print(f"V1[{m['v1_frame']}] -> V2[{m['v2_frame']}] "
+          f"source={m['source']} score={m['score']}")
 ```
 
-## Paramètres ajustables
-
-### Pour plus de précision (mais plus lent)
-```bash
-python combined_method/run_alignment_hybrid.py Plan1 \
-    --dtw-sample-rate 2 \
-    --akaze-sample-rate 1 \
-    --search-window 15
-```
-
-### Pour plus de rapidité (moins précis)
-```bash
-python combined_method/run_alignment_hybrid.py Plan1 \
-    --dtw-sample-rate 10 \
-    --akaze-sample-rate 5 \
-    --search-window 8
-```
-
-## Architecture
+## Module layout
 
 ```
 combined_method/
-├── __init__.py              # Exports principaux
-├── hybrid_alignment.py      # Cœur de l'algorithme Coarse-to-Fine
-├── visualization.py         # Génération de visualisations
-├── run_alignment_hybrid.py  # ← SCRIPT À LANCER
-└── run_hybrid.py            # Alternative (CLI avancée)
+├── __init__.py
+├── hybrid_alignment.py        # HybridAligner + align_videos_hybrid
+├── visualization.py           # plots, videos, HTML report
+├── _cli_helpers.py            # shared CLI utilities (plan/algo selection, CSV I/O)
+├── evaluation/                # SSIM, LPIPS, cycle consistency, baselines
+├── run_alignment_hybrid.py    # alignment entry point
+├── run_evaluation.py          # single-plan evaluation
+└── run_full_evaluation.py     # full sweep evaluation
 ```
 
-## Troubleshooting
+## Key metrics
 
-### "No plans found in 'dataset'"
-- Vérifiez que vous êtes dans le bon répertoire
-- Le dossier `dataset/` doit être au même niveau que `combined_method/`
-
-### Les vidéos sont très grandes
-- Utilisez des `sample_rate` plus élevés lors de l'extraction DTW
-- Limitez avec `--max-video-frames`
-
-### Qualité faible (trop de DTW fallback)
-- Réduisez `--search-window` pour forcer AKAZE à être plus précis
-- Augmentez `--min-inliers` pour être plus sélectif
-
-## Citation
-
-Approche Coarse-to-Fine utilisant :
-- **DTW (Dynamic Time Warping)** : Flux optique dense pour l'alignement global robuste
-- **AKAZE** : Détection rapide de features avec RANSAC pour le raffinement
-
----
-
-**Questions ? Consultez la documentation détaillée ou ouvrez les rapports HTML générés.**
+| Metric | Meaning |
+|---|---|
+| Total matches | Frames matched (= length of V1 stream considered) |
+| Refined % | Fraction refined by feature matching (vs. DTW fallback) |
+| DTW fallback % | Fraction kept at the DTW prediction |
+| Monotonicity | % of matches respecting forward progression |
+| Velocity ratio | Mean V2/V1 frame-rate ratio (1.0 = same speed) |
+| Mean inliers | Average RANSAC inliers in the fine phase |
+| Max correction | Largest delta between DTW prediction and final match |
