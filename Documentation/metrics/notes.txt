@@ -1,0 +1,36 @@
+1. SSIM (Structural Similarity Index Measure)
+Historiquement, l'évaluation de la qualité des images se faisait avec des métriques de calcul d'erreur pixel par pixel comme le MSE (Mean Squared Error) ou le PSNR. Le problème est que ces métriques ne correspondent pas à la perception humaine : une image légèrement floutée et une image dont le contraste a été modifié peuvent avoir le même score d'erreur MSE, alors que l'une paraîtra de très mauvaise qualité à l'œil nu et l'autre parfaitement nette.
+La philosophie du SSIM : SSIM propose une approche "descendante" (top-down) basée sur l'hypothèse que le système visuel humain est hautement adapté pour extraire des informations structurelles d'une scène. Au lieu d'essayer de quantifier des erreurs ou des "bruits" (comme le fait le MSE), SSIM évalue la dégradation de l'information structurelle entre une image de référence et une image déformée.
+Le fonctionnement mathématique : L'algorithme sépare la tâche de comparaison en trois mesures distinctes et indépendantes :
+La mesure de Luminance (l) : L'algorithme compare la luminosité moyenne des deux signaux. Concrètement, cela se calcule en utilisant la moyenne des intensités des pixels (notée μ).
+La mesure de Contraste (c) : Une fois la luminance moyenne soustraite, le signal restant est évalué pour son contraste. L'algorithme utilise l'écart-type (la racine carrée de la variance, notée σ) comme estimation du contraste du signal.
+La mesure de Structure (s) : Le signal est ensuite divisé par son propre écart-type pour le normaliser. La comparaison de structure s'effectue en calculant le coefficient de corrélation (le produit scalaire) entre ces deux vecteurs normalisés.
+La formule globale du SSIM combine ces trois éléments en les multipliant. Pour éviter que l'algorithme ne devienne instable (par exemple, si le dénominateur est proche de zéro dans les zones plates de l'image, comme un ciel bleu), de petites constantes (C 
+1
+​	
+ ,C 
+2
+​	
+ ,C 
+3
+​	
+ ) sont ajoutées aux équations.
+Application locale (MSSIM) : Plutôt que d'appliquer cette formule sur l'image entière d'un coup, SSIM est appliqué localement. Il utilise une fenêtre glissante (généralement une fonction de pondération gaussienne circulaire de 11x11 pixels) qui se déplace sur l'image pixel par pixel. Cela crée une "carte de qualité" qui permet d'obtenir un score global moyen appelé MSSIM (Mean SSIM).
+La principale limite (Pertinent pour ton mémoire) : Bien que très performant pour évaluer la compression (comme le JPEG), SSIM n'a pas été conçu pour gérer les distorsions géométriques (les décalages spatiaux, rotations, micro-mouvements). Si tes deux vidéos de rails sont légèrement désalignées spatialement, SSIM pénalisera lourdement le score, même si les images sont visuellement identiques.
+
+--------------------------------------------------------------------------------
+2. LPIPS (Learned Perceptual Image Patch Similarity)
+LPIPS est né d'un constat simple : bien que les humains évaluent la similarité visuelle presque sans effort, les processus sous-jacents sont extrêmement complexes, et les fonctions mathématiques "peu profondes" comme le SSIM ne parviennent pas à capter toutes les nuances de la perception humaine.
+La philosophie de LPIPS : La communauté de l'apprentissage profond (Deep Learning) a découvert un phénomène étonnant : la similarité perceptive est une propriété émergente des réseaux de neurones profonds. Un réseau de neurones (comme VGG ou AlexNet) entraîné pour une tâche de haut niveau (comme classifier si une image contient un chien ou un chat) apprend à "voir" le monde d'une manière qui correspond de façon frappante au jugement humain. LPIPS utilise donc l'espace de représentation interne de ces réseaux pour calculer une distance perceptuelle.
+Le fonctionnement algorithmique : Plutôt que de comparer les pixels directement, LPIPS fait passer les deux images (la référence et la cible) à travers un réseau de neurones pré-entraîné et compare leurs "cartes de caractéristiques" (feature maps) internes :
+Extraction : L'algorithme extrait les activations internes de plusieurs couches (layers) du réseau (L couches au total).
+Normalisation : Les activations sont normalisées à l'unité dans la dimension des canaux.
+Pondération (Scaling) : Chaque canal d'activation est multiplié par un vecteur de poids (w). Cela permet de donner plus ou moins d'importance à certaines caractéristiques visuelles.
+Calcul de la distance : L'algorithme calcule la distance Euclidienne (L2) entre ces activations pondérées, puis fait une moyenne spatiale et une somme sur tous les canaux.
+La Calibration par des jugements humains : Pour rendre cette métrique parfaite, les chercheurs de LPIPS ont créé un immense jeu de données appelé BAPPS (Berkeley-Adobe Perceptual Patch Similarity), contenant plus de 484 000 jugements humains. Ces jugements consistent à demander à des humains quelle image déformée ressemble le plus à une référence (Test 2AFC) ou si deux images sont identiques ou non (Test JND).
+Grâce à ce jeu de données, LPIPS propose une configuration "calibrée" (appelée configuration lin). Le réseau garde ses connaissances initiales (ses poids sont figés), mais il apprend une couche linéaire supplémentaire (le fameux vecteur w) spécifiquement ajustée pour imiter parfaitement les choix humains.
+Avantages par rapport au SSIM (Pertinent pour ton mémoire) : Contrairement au SSIM, les métriques basées sur l'apprentissage profond comme LPIPS s'en sortent bien mieux face aux ambiguïtés spatiales ou aux légers flous. Dans l'évaluation d'algorithmes réels (comme la super-résolution ou l'interpolation de frames), LPIPS surpasse les métriques classiques (SSIM, MSE) par une marge importante, car l'architecture même du réseau de neurones lui permet d'assimiler les structures complexes du monde physique.
+Synthèse pour l'alignement de tes vidéos de train
+Si tu dois justifier l'utilisation de l'un ou de l'autre dans ton mémoire :
+SSIM est mathématiquement élégant et très rapide, mais il vérifiera surtout si l'image 1 est exactement superposée à l'image 2 au pixel près (très punitif face aux vibrations ou aux micro-changements de géométrie de la voie).
+LPIPS agit comme un "œil humain expert". Il comprendra que c'est le même ballast ou le même rail, même s'il y a un très léger décalage, un flou de mouvement ou un changement d'exposition lié au soleil, ce qui en fait une métrique d'évaluation de bout en bout (end-to-end) beaucoup plus robuste pour ton rendu final.
