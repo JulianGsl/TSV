@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import unittest
 import os
-from new_method.feature_extraction import VideoFeatureExtractor
+from Old_version.new_method.feature_extraction import VideoFeatureExtractor
 
 class TestFeatureExtraction(unittest.TestCase):
     def setUp(self):

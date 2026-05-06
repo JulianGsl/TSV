@@ -5,8 +5,6 @@ This module handles the logic for aligning two videos using feature matching.
 
 import cv2
 import numpy as np
-import sys
-import os
 
 # Import our algorithms
 from .algorithms import orb

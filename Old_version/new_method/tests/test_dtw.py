@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from new_method.dtw_alignment import compute_dtw
+from Old_version.new_method.dtw_alignment import compute_dtw
 
 class TestDTW(unittest.TestCase):
     def test_simple_sequence(self):

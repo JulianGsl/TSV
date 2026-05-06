@@ -6,7 +6,6 @@ Generates plots and videos to visualize the alignment results.
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-import os
 
 # Import algorithms for feature detection
 from .algorithms import orb, brisk, akaze

@@ -10,12 +10,12 @@ import csv
 # Add project root to path to allow importing feature_matching.src
 # The file is in feature_matching/scripts/run_alignment.py
 # So we need to go up two levels: ../../
-sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../.."))
 
 # Update imports to reflect the new structure
-from feature_matching.src.alignment.core import align_videos
-from feature_matching.src.alignment.utils import filter_outliers_and_smooth
-from feature_matching.src.alignment.visualization import plot_alignment, create_side_by_side_video, generate_html_report
+from Old_version.feature_matching.src.alignment.core import align_videos
+from Old_version.feature_matching.src.alignment.utils import filter_outliers_and_smooth
+from Old_version.feature_matching.src.alignment.visualization import plot_alignment, create_side_by_side_video, generate_html_report
 
 # Update dataset path relative to script execution
 DATASET_DIR = "dataset"

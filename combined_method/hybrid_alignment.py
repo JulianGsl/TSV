@@ -22,13 +22,13 @@ import cv2
 import numpy as np
 import sys
 import os
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from new_method.feature_extraction import VideoFeatureExtractor
-from new_method.dtw_alignment import compute_dtw
+from Old_version.new_method import VideoFeatureExtractor
+from Old_version.new_method import compute_dtw
 
 # Supported feature matching algorithms
 SUPPORTED_ALGORITHMS = ["AKAZE", "BRISK", "ORB"]

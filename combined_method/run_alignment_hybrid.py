@@ -14,7 +14,6 @@ import argparse
 import sys
 import os
 import time
-from datetime import datetime
 
 # Add project root to path to allow imports
 # Script is in: TSV/combined_method/run_alignment_hybrid.py
@@ -37,8 +36,8 @@ from combined_method.visualization import (
     save_metrics_json
 )
 from combined_method._cli_helpers import get_available_plans as _list_plans
-from new_method.feature_extraction import VideoFeatureExtractor
-from new_method.dtw_alignment import compute_dtw
+from Old_version.new_method import VideoFeatureExtractor
+from Old_version.new_method import compute_dtw
 import numpy as np
 
 # Dataset path is resolved relative to the script (TSV/dataset),

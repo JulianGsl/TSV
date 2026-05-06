@@ -5,10 +5,11 @@ import os
 import random
 
 # Ensure project root is in path
-sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../.."))
 
 # Update imports to use feature_matching.src
-from feature_matching.src.alignment.algorithms import orb, brisk, akaze
+from Old_version.feature_matching.src.alignment.algorithms import orb
+from Old_version.feature_matching.src.alignment.algorithms import brisk, akaze
 
 # =============================================================================
 # CONFIGURATION
