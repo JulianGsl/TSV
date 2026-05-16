@@ -41,6 +41,8 @@ _SIGMA = 1.5
 
 def _ssim_single_channel(x: np.ndarray, y: np.ndarray) -> float:
     """SSIM on a single 2-D float channel."""
+    """Calculate 3 components of SSIM. (luminance, contrast, structural similarity)"""
+
     mu_x = cv2.GaussianBlur(x, _WINDOW, _SIGMA)
     mu_y = cv2.GaussianBlur(y, _WINDOW, _SIGMA)
 
@@ -102,17 +104,17 @@ class SSIMMetric(BaseMetric):
         if frame_v1.shape != frame_v2.shape:
             h, w = frame_v1.shape[:2]
             frame_v2 = cv2.resize(frame_v2, (w, h))
-
+        # Normalize photometric
         if self.photometric_normalize:
             frame_v2 = match_histograms(frame_v2, frame_v1)
-
+        # Apply ROI
         if self.roi is not None:
             frame_v1 = apply_roi(frame_v1, self.roi)
             frame_v2 = apply_roi(frame_v2, self.roi)
-
+        # Convert into float
         x = frame_v1.astype(np.float32)
         y = frame_v2.astype(np.float32)
-
+        # Grayscale
         if not self.multichannel:
             x = cv2.cvtColor(x, cv2.COLOR_BGR2GRAY)
             y = cv2.cvtColor(y, cv2.COLOR_BGR2GRAY)

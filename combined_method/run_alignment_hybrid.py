@@ -36,9 +36,6 @@ from combined_method.visualization import (
     save_metrics_json
 )
 from combined_method._cli_helpers import get_available_plans as _list_plans
-from Old_version.new_method.feature_extraction import VideoFeatureExtractor
-from Old_version.new_method.dtw_alignment import compute_dtw
-import numpy as np
 
 # Dataset path is resolved relative to the script (TSV/dataset),
 # so the script works regardless of the caller's cwd.
@@ -79,7 +76,7 @@ def select_algorithm():
 def process_plan_hybrid(plan_name, algorithm="AKAZE",
                         dtw_sample_rate=5, feature_sample_rate=1,
                         search_window=10, min_inliers=4,
-                        dtw_step_penalty=1.5):
+                        dtw_step_penalty=0.3):
     """
     Runs hybrid alignment on the specified plan.
 
@@ -138,29 +135,15 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE",
         return
 
     # ================================================================
-    # PHASE 2: DTW for visualization
+    # PHASE 2: Reuse DTW artefacts from the alignment phase
     # ================================================================
-    print("\n[Phase 2] Computing DTW cost matrix...")
+    print("\n[Phase 2] Reusing DTW cost matrix from alignment phase...")
 
-    extractor = VideoFeatureExtractor(
-        resize_dim=(320, 240),
-        sample_rate=dtw_sample_rate,
-        ignore_sky=True
-    )
-
-    features1, indices1 = extractor.extract_features(video1_path)
-    features2, indices2 = extractor.extract_features(video2_path)
-
-    mean1, std1 = np.mean(features1, axis=0), np.std(features1, axis=0)
-    mean2, std2 = np.mean(features2, axis=0), np.std(features2, axis=0)
-    features1_norm = (features1 - mean1) / (std1 + 1e-6)
-    features2_norm = (features2 - mean2) / (std2 + 1e-6)
-
-    path, cost_matrix = compute_dtw(
-        features1_norm, features2_norm,
-        step_penalty=dtw_step_penalty,
-        open_end=True
-    )
+    # The aligner already computed the DTW path + cost matrix internally;
+    # pulling them off the instance avoids a full second feature-extraction
+    # and DTW run that used to dominate this phase.
+    path = aligner.dtw_path
+    cost_matrix = aligner.dtw_cost_matrix
 
     print(f"  DTW path: {len(path)} waypoints")
     print(f"  Cost matrix: {cost_matrix.shape}")
@@ -173,16 +156,18 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE",
     metrics = compute_alignment_metrics(matches)
 
     print(f"  Total matches:      {metrics['total_matches']}")
-    print(f"  AKAZE refined:      {metrics['akaze_refined_count']} ({metrics['akaze_refined_percent']:.1f}%)")
+    print(f"  {algorithm} refined:      {metrics['refined_count']} ({metrics['refined_percent']:.1f}%)")
     print(f"  DTW fallback:       {metrics['dtw_fallback_count']} ({metrics['dtw_fallback_percent']:.1f}%)")
     print(f"  Monotonicity:       {metrics['monotonicity_score']:.1f}%")
     print(f"  Velocity ratio:     {metrics['velocity_mean']:.3f} ± {metrics['velocity_std']:.3f}")
-    print(f"  AKAZE inliers:      {metrics['akaze_score_mean']:.1f} ± {metrics['akaze_score_std']:.1f}")
+    print(f"  {algorithm} inliers:      {metrics['refined_score_mean']:.1f} ± {metrics['refined_score_std']:.1f}")
 
     # ================================================================
     # PHASE 4: Generate visualizations
     # ================================================================
     print("\n[Phase 4] Generating visualizations...")
+    # Defensive: re-create output_dir in case it was deleted between phases.
+    os.makedirs(output_dir, exist_ok=True)
 
     print("  [1/5] Alignment scatter plot...")
     plot_alignment_scatter(
@@ -210,15 +195,34 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE",
     )
 
     print("  [5/5] DTW cost matrix...")
+    # Overlay manual ground-truth anchors when we have them registered for
+    # this plan — drawn in sampled-index space using the DTW indices arrays.
+    gt_sampled = None
+    try:
+        from combined_method.dtw_diagnostic.ground_truth import get_anchors
+        anchors = get_anchors(plan_name)
+        if anchors:
+            import numpy as _np
+            idx1 = _np.asarray(aligner.dtw_indices1)
+            idx2 = _np.asarray(aligner.dtw_indices2)
+            gt_sampled = [
+                (int(_np.argmin(_np.abs(idx1 - v1))),
+                 int(_np.argmin(_np.abs(idx2 - v2))))
+                for v1, v2 in anchors
+            ]
+    except Exception:
+        gt_sampled = None
     plot_dtw_cost_matrix(
         cost_matrix, path,
-        os.path.join(output_dir, "dtw_cost_matrix.png")
+        os.path.join(output_dir, "dtw_cost_matrix.png"),
+        ground_truth_sampled=gt_sampled,
     )
 
     # ================================================================
     # PHASE 5: Generate aligned videos
     # ================================================================
     print("\n[Phase 5] Generating aligned videos...")
+    os.makedirs(output_dir, exist_ok=True)
 
     video_configs = [
         ("simple", "simple side-by-side (fastest)"),
@@ -243,10 +247,38 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE",
         except Exception as e:
             print(f"    ✗ ERROR: {e}")
 
+    # Diagnostic intermediates — let the user attribute alignment errors to a
+    # specific phase by comparing these against the final "aligned_simple.mp4":
+    #   - aligned_dtw_only.mp4         : Phase A only (raw DTW prediction)
+    #   - aligned_pre_rectification.mp4: Phase A + Phase B (no smoothing)
+    diagnostic_videos = [
+        ("dtw_only", getattr(aligner, "matches_dtw_only", None),
+         f"DTW only (no {algorithm})"),
+        ("pre_rectification", getattr(aligner, "matches_pre_rectification", None),
+         f"DTW + {algorithm}, no smoothing"),
+    ]
+    for tag, diag_matches, description in diagnostic_videos:
+        if not diag_matches:
+            continue
+        diag_path = os.path.join(output_dir, f"aligned_{tag}.mp4")
+        print(f"  Generating {tag} video ({description})...")
+        try:
+            stats = create_aligned_video(
+                video1_path, video2_path, diag_matches,
+                diag_path,
+                mode="simple",
+                max_frames=None
+            )
+            file_size_mb = os.path.getsize(diag_path) / (1024 * 1024)
+            print(f"    ✓ {stats['frames_written']} frames, {stats['resolution']}, {file_size_mb:.1f} MB")
+        except Exception as e:
+            print(f"    ✗ ERROR: {e}")
+
     # ================================================================
     # PHASE 6: Export data
     # ================================================================
     print("\n[Phase 6] Exporting data...")
+    os.makedirs(output_dir, exist_ok=True)
 
     csv_path = os.path.join(output_dir, "alignment_results.csv")
     save_alignment_csv(matches, csv_path)
@@ -255,6 +287,25 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE",
     json_path = os.path.join(output_dir, "metrics.json")
     save_metrics_json(metrics, json_path)
     print(f"  JSON: metrics.json ({len(metrics)} metrics)")
+
+    import numpy as _np
+
+    npy_acc = os.path.join(output_dir, "dtw_acc_cost.npy")
+    _np.save(npy_acc, cost_matrix)
+    print(f"  NPY: dtw_acc_cost.npy  ({cost_matrix.shape[0]}×{cost_matrix.shape[1]}, {os.path.getsize(npy_acc)/(1024*1024):.1f} MB)  [accumulated cost matrix]")
+
+    dist_matrix = getattr(aligner, "dtw_dist_matrix", None)
+    if dist_matrix is not None:
+        npy_dist = os.path.join(output_dir, "dtw_dist_matrix.npy")
+        _np.save(npy_dist, dist_matrix)
+        print(f"  NPY: dtw_dist_matrix.npy ({dist_matrix.shape[0]}×{dist_matrix.shape[1]}, {os.path.getsize(npy_dist)/(1024*1024):.1f} MB)  [raw pairwise distances]")
+
+    # Side-car artefacts the diagnostic tool needs to relate cost-matrix
+    # rows/cols (sampled space) back to the original frame indices.
+    _np.save(os.path.join(output_dir, "dtw_path.npy"), _np.asarray(path, dtype=_np.int32))
+    _np.save(os.path.join(output_dir, "dtw_indices1.npy"), _np.asarray(aligner.dtw_indices1, dtype=_np.int32))
+    _np.save(os.path.join(output_dir, "dtw_indices2.npy"), _np.asarray(aligner.dtw_indices2, dtype=_np.int32))
+    print(f"  NPY: dtw_path.npy, dtw_indices1.npy, dtw_indices2.npy  [diagnostic side-cars]")
 
     # ================================================================
     # PHASE 7: Generate HTML report
@@ -321,7 +372,7 @@ def parse_args():
                    help="Strict ± window (in frames) around the DTW prediction.")
     p.add_argument("--min-inliers", type=int, default=4,
                    help="Minimum RANSAC inliers required to accept a fine-phase match.")
-    p.add_argument("--dtw-step-penalty", type=float, default=1.5,
+    p.add_argument("--dtw-step-penalty", type=float, default=0.3,
                    help="DTW step penalty (higher = stronger diagonal preference).")
     return p.parse_args()
 

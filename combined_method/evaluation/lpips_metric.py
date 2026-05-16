@@ -97,17 +97,17 @@ class LPIPSMetric(BaseMetric):
         if frame_v1.shape != frame_v2.shape:
             h, w = frame_v1.shape[:2]
             frame_v2 = cv2.resize(frame_v2, (w, h))
-
+        # Normalize photometric
         if self.photometric_normalize:
             frame_v2 = match_histograms(frame_v2, frame_v1)
-
+        # Apply ROI
         if self.roi is not None:
             frame_v1 = apply_roi(frame_v1, self.roi)
             frame_v2 = apply_roi(frame_v2, self.roi)
-
+        # Convert into tensors
         t1 = self._to_tensor(frame_v1)
         t2 = self._to_tensor(frame_v2)
-
+        # Compute LPIPS
         with self._torch.no_grad():
             score = self._loss_fn(t1, t2)
 

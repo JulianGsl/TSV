@@ -1,9 +1,9 @@
 {
   "total_matches": 2711,
-  "akaze_refined_count": 1801,
-  "akaze_refined_percent": 66.43305053485798,
-  "dtw_fallback_count": 910,
-  "dtw_fallback_percent": 33.56694946514202,
+  "akaze_refined_count": 2257,
+  "akaze_refined_percent": 83.253412025083,
+  "dtw_fallback_count": 454,
+  "dtw_fallback_percent": 16.746587974917006,
   "monotonicity_violations": 0,
   "monotonicity_score": 100.0,
   "v1_frame_range": [
@@ -11,19 +11,19 @@
     2710
   ],
   "v2_frame_range": [
-    4,
-    2619
+    0,
+    2584
   ],
-  "velocity_mean": 0.9649446494464945,
-  "velocity_std": 0.6614503079230105,
+  "velocity_mean": 0.9535055350553505,
+  "velocity_std": 0.7058379902070642,
   "velocity_range": [
     0.0,
     5.0
   ],
-  "akaze_score_mean": 7.781787895613548,
-  "akaze_score_std": 3.6648337567655855,
-  "akaze_score_max": 25.0,
-  "akaze_correction_mean": -0.22931704608550804,
-  "akaze_correction_std": 1.532235895880784,
-  "akaze_correction_max": 9.0
+  "akaze_score_mean": 7.8134692069118294,
+  "akaze_score_std": 4.833628624375558,
+  "akaze_score_max": 56.0,
+  "akaze_correction_mean": -0.08108108108108109,
+  "akaze_correction_std": 1.4104744819170585,
+  "akaze_correction_max": 8.0
 }

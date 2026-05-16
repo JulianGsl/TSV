@@ -1,29 +1,29 @@
 {
-  "total_matches": 2722,
-  "akaze_refined_count": 1106,
-  "akaze_refined_percent": 40.63188831741367,
-  "dtw_fallback_count": 1616,
-  "dtw_fallback_percent": 59.36811168258633,
+  "total_matches": 2211,
+  "akaze_refined_count": 1354,
+  "akaze_refined_percent": 61.239258254183625,
+  "dtw_fallback_count": 857,
+  "dtw_fallback_percent": 38.760741745816375,
   "monotonicity_violations": 0,
   "monotonicity_score": 100.0,
   "v1_frame_range": [
     0,
-    2721
+    2210
   ],
   "v2_frame_range": [
     1,
-    2644
+    2694
   ],
-  "velocity_mean": 0.9713340683572216,
-  "velocity_std": 0.6528607381759313,
+  "velocity_mean": 1.218552036199095,
+  "velocity_std": 1.7064476300960894,
   "velocity_range": [
     0.0,
-    6.0
+    26.0
   ],
-  "akaze_score_mean": 6.773056057866184,
-  "akaze_score_std": 3.2077039202357023,
-  "akaze_score_max": 32.0,
-  "akaze_correction_mean": 0.26220614828209765,
-  "akaze_correction_std": 1.8056472135646264,
-  "akaze_correction_max": 7.0
+  "akaze_score_mean": 7.556868537666174,
+  "akaze_score_std": 3.3141878796731348,
+  "akaze_score_max": 28.0,
+  "akaze_correction_mean": -1.1691285081240768,
+  "akaze_correction_std": 2.994612293027865,
+  "akaze_correction_max": 10.0
 }

@@ -1,4 +1,22 @@
+# =============================================================================
+# TSV — Temporal Synchronization of Videos
+# =============================================================================
+
+# --- Core pipeline (always required) -----------------------------------------
 opencv-python>=4.5.0
 numpy>=1.19.0
 matplotlib>=3.3.0
 scipy>=1.6.0
+
+# --- Evaluation suite --------------------------------------------------------
+# LPIPS perceptual metric. Pulls in PyTorch and torchvision. Required when
+# running combined_method/run_evaluation.py with --metrics lpips (or all).
+# Skip these three if you only need the alignment, not the perceptual
+# evaluation: the alignment pipeline itself is CPU-only and PyTorch-free.
+lpips>=0.1.4
+torch>=1.10.0
+torchvision>=0.11.0
+
+# --- Development -------------------------------------------------------------
+# Required to run combined_method/tests/.
+pytest>=7.0
