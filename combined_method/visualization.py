@@ -66,7 +66,7 @@ def draw_simple_side_by_side(frame1, frame2, v1_idx, v2_idx, source="", score=0,
                 font, font_scale, (255, 255, 255), thickness)
 
     # Source indicator with color coding
-    if source == "akaze_refined":
+    if source != "dtw_fallback":
         color = (0, 255, 0)  # Green for feature matching refined
         text = f"{algorithm} ({score} inliers)"
     else:
@@ -123,10 +123,12 @@ def draw_features_side_by_side(frame1, frame2, v1_idx, v2_idx, source="", score=
 
 def draw_optical_flow_side_by_side(frame1, frame2, prev_frame1, prev_frame2, v1_idx, v2_idx, source="", score=0, algorithm="AKAZE"):
     """
-    Create side-by-side view with optical flow visualization.
+    DEPRECATED. Side-by-side view with optical flow visualisation.
 
-    Args:
-        algorithm: Feature matching algorithm name for display in overlay
+    Replaced by `draw_matches_side_by_side`, which is more interpretable
+    (lines between matched keypoints rather than HSV-coded motion field).
+    Kept for backward compatibility and possible ablation use.
+    Not invoked by the current pipeline.
     """
     if frame1 is None or frame2 is None:
         return None
@@ -164,6 +166,94 @@ def draw_optical_flow_side_by_side(frame1, frame2, prev_frame1, prev_frame2, v1_
     return draw_simple_side_by_side(frame1_flow, frame2_flow, v1_idx, v2_idx, source, score, algorithm)
 
 
+def draw_matches_side_by_side(frame1, frame2, v1_idx, v2_idx,
+                              source="", score=0, algorithm="AKAZE"):
+    """
+    Side-by-side view with feature correspondences drawn as lines between
+    V1 keypoints and V2 keypoints. Inliers from a RANSAC homography only.
+
+    This is the "matches" mode: it visually documents what the inner
+    matcher actually saw when it made its decision. Useful for the
+    thesis: shows what alignment "means" at the pixel level.
+    """
+    if frame1 is None or frame2 is None:
+        return None
+
+    # Detector
+    if algorithm.upper() == "BRISK":
+        detector = cv2.BRISK_create()
+    elif algorithm.upper() == "ORB":
+        detector = cv2.ORB_create(nfeatures=5000)
+    else:
+        detector = cv2.AKAZE_create(descriptor_type=cv2.AKAZE_DESCRIPTOR_MLDB,
+                                    threshold=0.001)
+
+    gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+    kp1, des1 = detector.detectAndCompute(gray1, None)
+    kp2, des2 = detector.detectAndCompute(gray2, None)
+
+    if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
+        # Fall back to plain side-by-side if matching impossible.
+        return draw_simple_side_by_side(frame1, frame2, v1_idx, v2_idx,
+                                        source, score, algorithm)
+
+    # KNN + Lowe ratio test.
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    try:
+        knn = bf.knnMatch(des1, des2, k=2)
+    except cv2.error:
+        return draw_simple_side_by_side(frame1, frame2, v1_idx, v2_idx,
+                                        source, score, algorithm)
+
+    good = []
+    for pair in knn:
+        if len(pair) == 2:
+            m, n = pair
+            if m.distance < 0.75 * n.distance:
+                good.append(m)
+
+    # RANSAC inliers (homography). Only inliers are drawn.
+    inlier_matches = []
+    if len(good) >= 4:
+        src = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+        dst = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+        H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 2.5,
+                                     maxIters=2000, confidence=0.999)
+        if mask is not None:
+            inlier_matches = [m for m, ok in zip(good, mask.ravel()) if ok]
+
+    # cv2.drawMatches stacks images horizontally and draws colored lines.
+    # We pass only the inliers, with random per-match colors for legibility.
+    if inlier_matches:
+        combined = cv2.drawMatches(
+            frame1, kp1, frame2, kp2, inlier_matches, None,
+            matchColor=None,             # random color per match
+            singlePointColor=(80, 80, 80),
+            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+        )
+    else:
+        combined = np.hstack([frame1, frame2])
+
+    # Overlay banner with metadata, similar to the simple/features modes.
+    h, w = combined.shape[:2]
+    overlay = combined.copy()
+    cv2.rectangle(overlay, (0, h - 60), (w, h), (0, 0, 0), -1)
+    combined = cv2.addWeighted(overlay, 0.7, combined, 0.3, 0)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(combined, f"Video 1 - Frame {v1_idx}", (10, h - 35),
+                font, 0.6, (255, 255, 255), 2)
+    cv2.putText(combined, f"Video 2 - Frame {v2_idx}", (frame1.shape[1] + 10, h - 35),
+                font, 0.6, (255, 255, 255), 2)
+    n_in = len(inlier_matches)
+    color = (0, 255, 0) if source != "dtw_fallback" else (0, 165, 255)
+    text = (f"{algorithm}: {n_in} RANSAC inliers, source={source}"
+            if source != "dtw_fallback"
+            else f"DTW fallback (no refined match), visual probe: {n_in} inliers")
+    cv2.putText(combined, text, (10, h - 10), font, 0.6, color, 2)
+    return combined
+
+
 def create_aligned_video(
     video1_path: str,
     video2_path: str,
@@ -182,7 +272,7 @@ def create_aligned_video(
         video2_path: Path to video 2
         matches: List of match dictionaries from hybrid alignment
         output_path: Output video path
-        mode: "simple", "features", or "flow"
+        mode: "simple", "features", or "matches"
         max_frames: Limit number of frames (None for all)
         fps: Output FPS (None to use video1's FPS)
         algorithm: Feature matching algorithm name (AKAZE, BRISK, ORB) for display
@@ -248,12 +338,8 @@ def create_aligned_video(
         # Generate visualization based on mode
         if mode == "features":
             combined = draw_features_side_by_side(frame1, frame2, v1_idx, v2_idx, source, score, algorithm)
-        elif mode == "flow":
-            combined = draw_optical_flow_side_by_side(
-                frame1, frame2, prev_frame1, prev_frame2, v1_idx, v2_idx, source, score, algorithm
-            )
-            prev_frame1 = frame1.copy()
-            prev_frame2 = frame2.copy()
+        elif mode == "matches":
+            combined = draw_matches_side_by_side(frame1, frame2, v1_idx, v2_idx, source, score, algorithm)
         else:  # simple
             combined = draw_simple_side_by_side(frame1, frame2, v1_idx, v2_idx, source, score, algorithm)
 
@@ -286,7 +372,7 @@ def plot_alignment_scatter(matches: list, output_path: str, title: str = "Video 
     sources = [m.get('source', 'unknown') for m in matches]
 
     # Color by source
-    colors = ['green' if s == 'akaze_refined' else 'orange' for s in sources]
+    colors = ['green' if s != 'dtw_fallback' else 'orange' for s in sources]
 
     scatter = ax.scatter(v1_frames, v2_frames, c=colors, alpha=0.6, s=10)
 
@@ -305,9 +391,9 @@ def plot_alignment_scatter(matches: list, output_path: str, title: str = "Video 
     ax.set_title(title, fontsize=14)
 
     # Legend
-    akaze_patch = mpatches.Patch(color='green', label='AKAZE Refined')
+    refined_patch = mpatches.Patch(color='green', label='Refined')
     dtw_patch = mpatches.Patch(color='orange', label='DTW Fallback')
-    ax.legend(handles=[akaze_patch, dtw_patch, ax.lines[0], ax.lines[1]], loc='upper left')
+    ax.legend(handles=[refined_patch, dtw_patch, ax.lines[0], ax.lines[1]], loc='upper left')
 
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -319,8 +405,8 @@ def plot_alignment_scatter(matches: list, output_path: str, title: str = "Video 
 
 def plot_alignment_difference(matches: list, output_path: str):
     """
-    Plot the difference between AKAZE refinement and DTW prediction.
-    Shows how much AKAZE corrects the DTW estimate.
+    Plot the difference between the feature matcher's refinement and the
+    DTW prediction. Shows how much the matcher corrects the DTW estimate.
     """
     fig, axes = plt.subplots(2, 1, figsize=(14, 10))
 
@@ -344,19 +430,19 @@ def plot_alignment_difference(matches: list, output_path: str):
 
     # Bottom plot: Difference (correction) over time
     ax2 = axes[1]
-    colors = ['green' if s == 'akaze_refined' else 'orange' for s in sources]
+    colors = ['green' if s != 'dtw_fallback' else 'orange' for s in sources]
     ax2.scatter(v1_frames, differences, c=colors, alpha=0.6, s=15)
     ax2.axhline(y=0, color='r', linestyle='--', alpha=0.5, label='No Correction')
     ax2.set_xlabel("Video 1 Frame")
     ax2.set_ylabel("Correction (frames)")
-    ax2.set_title("AKAZE Correction vs DTW Prediction")
+    ax2.set_title("Refinement Correction vs DTW Prediction")
     ax2.legend()
     ax2.grid(True, alpha=0.3)
 
     # Add statistics
-    akaze_diffs = [d for d, s in zip(differences, sources) if s == 'akaze_refined']
-    if akaze_diffs:
-        stats_text = f"AKAZE corrections: mean={np.mean(akaze_diffs):.2f}, std={np.std(akaze_diffs):.2f}, max={np.max(np.abs(akaze_diffs)):.0f}"
+    refined_diffs = [d for d, s in zip(differences, sources) if s != 'dtw_fallback']
+    if refined_diffs:
+        stats_text = f"Refinement corrections: mean={np.mean(refined_diffs):.2f}, std={np.std(refined_diffs):.2f}, max={np.max(np.abs(refined_diffs)):.0f}"
         ax2.text(0.02, 0.98, stats_text, transform=ax2.transAxes, fontsize=9,
                  verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
@@ -369,20 +455,21 @@ def plot_alignment_difference(matches: list, output_path: str):
 
 def plot_source_distribution(matches: list, output_path: str):
     """
-    Create pie chart and histogram showing AKAZE vs DTW fallback distribution.
+    Create pie chart and histogram showing refined matches vs DTW fallback.
+    "Refined" covers any feature-matcher backed match (AKAZE / BRISK / ORB).
     """
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
     sources = [m.get('source', 'unknown') for m in matches]
     scores = [m.get('score', 0) for m in matches]
 
-    akaze_count = sum(1 for s in sources if s == 'akaze_refined')
+    refined_count = sum(1 for s in sources if s != 'dtw_fallback')
     dtw_count = sum(1 for s in sources if s == 'dtw_fallback')
 
     # Pie chart
     ax1 = axes[0]
-    sizes = [akaze_count, dtw_count]
-    labels = [f'AKAZE Refined\n({akaze_count})', f'DTW Fallback\n({dtw_count})']
+    sizes = [refined_count, dtw_count]
+    labels = [f'Refined\n({refined_count})', f'DTW Fallback\n({dtw_count})']
     colors = ['#2ecc71', '#e67e22']
     explode = (0.05, 0)
 
@@ -392,21 +479,21 @@ def plot_source_distribution(matches: list, output_path: str):
 
     # Score histogram
     ax2 = axes[1]
-    akaze_scores = [s for s, src in zip(scores, sources) if src == 'akaze_refined' and s > 0]
+    refined_scores = [s for s, src in zip(scores, sources) if src != 'dtw_fallback' and s > 0]
 
-    if akaze_scores:
-        ax2.hist(akaze_scores, bins=30, color='green', alpha=0.7, edgecolor='black')
-        ax2.axvline(x=np.mean(akaze_scores), color='red', linestyle='--',
-                    label=f'Mean: {np.mean(akaze_scores):.1f}')
-        ax2.axvline(x=np.median(akaze_scores), color='blue', linestyle='--',
-                    label=f'Median: {np.median(akaze_scores):.1f}')
+    if refined_scores:
+        ax2.hist(refined_scores, bins=30, color='green', alpha=0.7, edgecolor='black')
+        ax2.axvline(x=np.mean(refined_scores), color='red', linestyle='--',
+                    label=f'Mean: {np.mean(refined_scores):.1f}')
+        ax2.axvline(x=np.median(refined_scores), color='blue', linestyle='--',
+                    label=f'Median: {np.median(refined_scores):.1f}')
         ax2.set_xlabel("RANSAC Inliers")
         ax2.set_ylabel("Frequency")
-        ax2.set_title("AKAZE Match Quality (RANSAC Inliers)")
+        ax2.set_title("Match Quality (RANSAC Inliers)")
         ax2.legend()
     else:
-        ax2.text(0.5, 0.5, "No AKAZE matches", ha='center', va='center', transform=ax2.transAxes)
-        ax2.set_title("AKAZE Match Quality")
+        ax2.text(0.5, 0.5, "No refined matches", ha='center', va='center', transform=ax2.transAxes)
+        ax2.set_title("Match Quality")
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
@@ -472,9 +559,18 @@ def plot_velocity_analysis(matches: list, output_path: str):
     return output_path
 
 
-def plot_dtw_cost_matrix(cost_matrix: np.ndarray, path: list, output_path: str):
+def plot_dtw_cost_matrix(cost_matrix: np.ndarray, path: list, output_path: str,
+                          ground_truth_sampled: list = None):
     """
-    Visualize DTW cost matrix with optimal path.
+    Visualize DTW cost matrix with optimal path and (optional) ground truth.
+
+    Args:
+        cost_matrix: accumulated cost matrix (sampled space).
+        path: list of (i, j) DTW waypoints in sampled space.
+        output_path: where to write the PNG.
+        ground_truth_sampled: optional list of (i, j) anchors in sampled space
+            — when given, drawn as a piecewise-linear "manual ground truth"
+            line for visual comparison against the DTW path.
     """
     fig, ax = plt.subplots(figsize=(12, 10))
 
@@ -489,13 +585,26 @@ def plot_dtw_cost_matrix(cost_matrix: np.ndarray, path: list, output_path: str):
     if path:
         path_i = [p[0] for p in path]
         path_j = [p[1] for p in path]
-        ax.plot(path_j, path_i, 'w-', linewidth=2, label='Optimal Path')
+        ax.plot(path_j, path_i, 'w-', linewidth=2, label='DTW path')
         ax.scatter([path_j[0]], [path_i[0]], c='lime', s=100, marker='o', label='Start', zorder=5)
         ax.scatter([path_j[-1]], [path_i[-1]], c='red', s=100, marker='s', label='End', zorder=5)
 
+    # Optional: piecewise-linear ground truth between manual anchors
+    if ground_truth_sampled:
+        gt = sorted(ground_truth_sampled)
+        gt_i = [a[0] for a in gt]
+        gt_j = [a[1] for a in gt]
+        ax.plot(gt_j, gt_i, '-', color='#ff00ff', linewidth=2.2,
+                label='Manual ground truth (lerp)', alpha=0.95)
+        ax.scatter(gt_j, gt_i, c='#ff00ff', edgecolors='white', linewidths=1.5,
+                   s=70, marker='o', zorder=6)
+
     ax.set_xlabel("Video 2 Frame (sampled)")
     ax.set_ylabel("Video 1 Frame (sampled)")
-    ax.set_title("DTW Cost Matrix with Optimal Path")
+    title = "DTW Cost Matrix with Optimal Path"
+    if ground_truth_sampled:
+        title += " vs Manual Ground Truth"
+    ax.set_title(title)
     ax.legend(loc='upper left')
 
     plt.tight_layout()
@@ -518,10 +627,11 @@ def compute_alignment_metrics(matches: list) -> dict:
     sources = [m.get('source', 'unknown') for m in matches]
     dtw_preds = np.array([m.get('dtw_prediction', m['v2_frame']) for m in matches])
 
-    # Basic counts
+    # Basic counts. "Refined" = match accepted by phase B (any algorithm),
+    # as opposed to "dtw_fallback" = the DTW prediction was kept as-is.
     total = len(matches)
-    akaze_count = sum(1 for s in sources if s == 'akaze_refined')
-    dtw_count = total - akaze_count
+    refined_count = sum(1 for s in sources if s != 'dtw_fallback')
+    dtw_count = total - refined_count
 
     # Monotonicity check
     monotonic_violations = sum(1 for i in range(1, len(v2_frames)) if v2_frames[i] < v2_frames[i-1])
@@ -534,17 +644,19 @@ def compute_alignment_metrics(matches: list) -> dict:
         if dv1 > 0:
             velocities.append(dv2 / dv1)
 
-    # AKAZE correction statistics
+    # Phase B correction statistics: by how much does the matcher pull
+    # the final V2 away from the DTW prediction, where it succeeds?
     corrections = v2_frames - dtw_preds
-    akaze_corrections = [c for c, s in zip(corrections, sources) if s == 'akaze_refined']
+    refined_corrections = [c for c, s in zip(corrections, sources) if s != 'dtw_fallback']
 
-    # Score statistics (only for AKAZE)
-    akaze_scores = [s for s, src in zip(scores, sources) if src == 'akaze_refined' and s > 0]
+    # Inlier-score statistics for refined matches only.
+    refined_scores = [s for s, src in zip(scores, sources) if src != 'dtw_fallback' and s > 0]
 
     metrics = {
         "total_matches": total,
-        "akaze_refined_count": akaze_count,
-        "akaze_refined_percent": 100 * akaze_count / total if total > 0 else 0,
+        # Canonical keys (algorithm-agnostic).
+        "refined_count": refined_count,
+        "refined_percent": 100 * refined_count / total if total > 0 else 0,
         "dtw_fallback_count": dtw_count,
         "dtw_fallback_percent": 100 * dtw_count / total if total > 0 else 0,
         "monotonicity_violations": monotonic_violations,
@@ -554,13 +666,26 @@ def compute_alignment_metrics(matches: list) -> dict:
         "velocity_mean": float(np.mean(velocities)) if velocities else 1.0,
         "velocity_std": float(np.std(velocities)) if velocities else 0.0,
         "velocity_range": [float(min(velocities)), float(max(velocities))] if velocities else [1.0, 1.0],
-        "akaze_score_mean": float(np.mean(akaze_scores)) if akaze_scores else 0.0,
-        "akaze_score_std": float(np.std(akaze_scores)) if akaze_scores else 0.0,
-        "akaze_score_max": float(max(akaze_scores)) if akaze_scores else 0,
-        "akaze_correction_mean": float(np.mean(akaze_corrections)) if akaze_corrections else 0.0,
-        "akaze_correction_std": float(np.std(akaze_corrections)) if akaze_corrections else 0.0,
-        "akaze_correction_max": float(np.max(np.abs(akaze_corrections))) if akaze_corrections else 0.0,
+        "refined_score_mean": float(np.mean(refined_scores)) if refined_scores else 0.0,
+        "refined_score_std": float(np.std(refined_scores)) if refined_scores else 0.0,
+        "refined_score_max": float(max(refined_scores)) if refined_scores else 0,
+        "refined_correction_mean": float(np.mean(refined_corrections)) if refined_corrections else 0.0,
+        "refined_correction_std": float(np.std(refined_corrections)) if refined_corrections else 0.0,
+        "refined_correction_max": float(np.max(np.abs(refined_corrections))) if refined_corrections else 0.0,
     }
+
+    # Backward-compatible aliases. Older consumers (HTML reports rendered
+    # from previously saved JSONs, third-party analysis scripts) still read
+    # the legacy keys; we duplicate the values so nothing breaks. Drop these
+    # aliases once all consumers have migrated.
+    metrics["akaze_refined_count"]      = metrics["refined_count"]
+    metrics["akaze_refined_percent"]    = metrics["refined_percent"]
+    metrics["akaze_score_mean"]         = metrics["refined_score_mean"]
+    metrics["akaze_score_std"]          = metrics["refined_score_std"]
+    metrics["akaze_score_max"]          = metrics["refined_score_max"]
+    metrics["akaze_correction_mean"]    = metrics["refined_correction_mean"]
+    metrics["akaze_correction_std"]     = metrics["refined_correction_std"]
+    metrics["akaze_correction_max"]     = metrics["refined_correction_max"]
 
     return metrics
 
@@ -577,6 +702,9 @@ def generate_html_report(
     Generate comprehensive HTML report with all visualizations.
     """
     report_path = os.path.join(output_dir, "report.html")
+
+    # Algorithm name for human-readable labels in the report.
+    algo_name = (config or {}).get("algorithm", "feature matcher")
 
     # Get relative paths for images
     def rel_path(filename):
@@ -707,7 +835,7 @@ def generate_html_report(
     <div class="container">
         <header>
             <h1>Hybrid Video Alignment Report</h1>
-            <p>Coarse-to-Fine Alignment using DTW + AKAZE</p>
+            <p>Coarse-to-Fine Alignment using DTW + {algo_name}</p>
             <p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         </header>
 
@@ -732,8 +860,8 @@ def generate_html_report(
                         <div class="metric-label">Total Matches</div>
                     </div>
                     <div class="metric-box">
-                        <div class="metric-value success">{metrics.get('akaze_refined_percent', 0):.1f}%</div>
-                        <div class="metric-label">AKAZE Refined</div>
+                        <div class="metric-value success">{metrics.get('refined_percent', metrics.get('akaze_refined_percent', 0)):.1f}%</div>
+                        <div class="metric-label">{algo_name} Refined</div>
                     </div>
                     <div class="metric-box">
                         <div class="metric-value warning">{metrics.get('dtw_fallback_percent', 0):.1f}%</div>
@@ -757,18 +885,18 @@ def generate_html_report(
                     </div>
                 </div>
 
-                <h3 style="margin-top: 30px;">AKAZE Quality</h3>
+                <h3 style="margin-top: 30px;">{algo_name} Quality</h3>
                 <div class="metrics-grid">
                     <div class="metric-box">
-                        <div class="metric-value">{metrics.get('akaze_score_mean', 0):.1f}</div>
+                        <div class="metric-value">{metrics.get('refined_score_mean', metrics.get('akaze_score_mean', 0)):.1f}</div>
                         <div class="metric-label">Mean Inliers</div>
                     </div>
                     <div class="metric-box">
-                        <div class="metric-value">{metrics.get('akaze_correction_mean', 0):.2f}</div>
+                        <div class="metric-value">{metrics.get('refined_correction_mean', metrics.get('akaze_correction_mean', 0)):.2f}</div>
                         <div class="metric-label">Mean Correction (frames)</div>
                     </div>
                     <div class="metric-box">
-                        <div class="metric-value">{metrics.get('akaze_correction_max', 0):.0f}</div>
+                        <div class="metric-value">{metrics.get('refined_correction_max', metrics.get('akaze_correction_max', 0)):.0f}</div>
                         <div class="metric-label">Max Correction</div>
                     </div>
                 </div>
@@ -780,17 +908,17 @@ def generate_html_report(
             <div class="card-body">
                 <div class="image-container">
                     <img src="alignment_scatter.png" alt="Alignment Scatter Plot">
-                    <p>Scatter plot showing frame correspondences (green=AKAZE, orange=DTW)</p>
+                    <p>Scatter plot showing frame correspondences (green={algo_name}, orange=DTW)</p>
                 </div>
             </div>
         </div>
 
         <div class="card">
-            <div class="card-header">AKAZE Correction Analysis</div>
+            <div class="card-header">{algo_name} Correction Analysis</div>
             <div class="card-body">
                 <div class="image-container">
                     <img src="alignment_difference.png" alt="Alignment Difference">
-                    <p>How much AKAZE corrects the DTW predictions</p>
+                    <p>How much {algo_name} corrects the DTW predictions</p>
                 </div>
             </div>
         </div>
@@ -800,7 +928,7 @@ def generate_html_report(
             <div class="card-body">
                 <div class="image-container">
                     <img src="source_distribution.png" alt="Source Distribution">
-                    <p>Distribution of alignment sources and AKAZE match quality</p>
+                    <p>Distribution of alignment sources and {algo_name} match quality</p>
                 </div>
             </div>
         </div>
@@ -837,7 +965,7 @@ def generate_html_report(
 
         <footer>
             <p>Generated by Hybrid Video Alignment System</p>
-            <p>Coarse-to-Fine: DTW (macro) + AKAZE (micro)</p>
+            <p>Coarse-to-Fine: DTW (macro) + {algo_name} (micro)</p>
         </footer>
     </div>
 </body>

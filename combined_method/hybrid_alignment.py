@@ -1,21 +1,46 @@
 """
-Hybrid Video Alignment - Coarse-to-Fine Approach (v2 - Anti-Trembling)
+Hybrid Video Alignment — Coarse-to-Fine Pipeline
 
-This module combines:
-- Phase A (Coarse): DTW-based optical flow alignment for robust macro-synchronization
-- Phase B (Fine): Feature matching (AKAZE/BRISK/ORB) for precise micro-alignment
-- Phase C (Fallback): DTW prediction as safety net when feature matching fails
-- Phase D (NEW): Global optimization with monotonicity constraint to prevent trembling
+Aligns two videos of the same railway trajectory recorded on different
+days at different speeds. The pipeline runs six phases:
 
-Key improvements in v2:
-- DTW distance penalty: Scores are weighted by proximity to DTW prediction
-- Top-K candidates: Keep best K candidates per frame for global optimization
-- Monotonic path optimization: Dynamic Programming to find smooth, monotonic alignment
-- Post-processing smoothing: Final pass to eliminate residual jitter
-- Multi-algorithm support: AKAZE, BRISK, or ORB for feature matching
+    Phase 0  : Preprocessing             (luminance histogram matching V2 -> V1)
+    Phase A.1: Feature extraction        (per-frame gradient orientation
+                                          histogram, `grad_hist_16`)
+    Phase A.2: Open-end DTW              (adaptive step penalty, plus a
+                                          per-waypoint confidence side-car)
+    Phase B  : Feature matching          (AKAZE/BRISK/ORB + KNN + Lowe's
+                                          ratio + spatial-coherence filter
+                                          + RANSAC homography)
+    Phase B' : Rescue                    (opportunistic override of the
+                                          DTW prediction in low-confidence
+                                          zones, when phase B produces a
+                                          consistent contradicting signal)
+    Phase C  : Global optimization       (top-K candidates per frame, then
+                                          monotonic DP through the trellis)
+    Phase D  : Smoothing                 (weighted moving average +
+                                          monotonicity re-enforcement)
 
-The DTW provides an "unbreakable skeleton" that prevents drift,
-while feature matching acts as a "magnifying glass" for pixel-precise alignment.
+Design principles
+-----------------
+- DTW provides a globally robust skeleton; feature matching refines it
+  locally; the DP step enforces a monotonic non-trembling output.
+- The strict ±N search window in phase B is never widened on failure.
+  When phase B cannot find a match, the DTW prediction is kept as-is
+  (`source = "dtw_fallback"`).
+- The rescue (phase B') is the single carefully circumscribed exception
+  to that rule: it requires multiple consecutive frames of consistent
+  evidence before overriding DTW.
+
+Module organisation
+-------------------
+- This file holds the `HybridAligner` class and the `align_videos_hybrid`
+  thin wrapper.
+- Side modules: `preprocessing.py`, `dtw_confidence.py`,
+  `phase_b_rescue.py`, all in this package.
+- DTW core (`compute_dtw`) is imported from `combined_method.dtw_core`
+  (see import below); `Old_version/new_method/` only re-exports it as a
+  backward-compatibility shim.
 """
 
 import cv2
@@ -27,8 +52,7 @@ from typing import List, Dict, Tuple
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from Old_version.new_method.feature_extraction import VideoFeatureExtractor
-from Old_version.new_method.dtw_alignment import compute_dtw
+from combined_method.dtw_core import compute_dtw
 
 # Supported feature matching algorithms
 SUPPORTED_ALGORITHMS = ["AKAZE", "BRISK", "ORB"]
@@ -44,7 +68,7 @@ class HybridAligner:
         self,
         algorithm: str = "AKAZE",
         dtw_sample_rate: int = 5,
-        dtw_step_penalty: float = 1.5,
+        dtw_step_penalty: float = 0.3,
         feature_sample_rate: int = 1,
         search_window: int = 10,
         min_inliers_threshold: int = 4,
@@ -56,6 +80,10 @@ class HybridAligner:
         enable_global_optimization: bool = True,
         enable_smoothing: bool = True,
         smoothing_window: int = 5,
+        # Preprocessing & rescue (new) ---------------------------------
+        enable_preprocessing: bool = True,
+        enable_phase_b_rescue: bool = True,
+        # ----------------------------------------------------------------
         verbose: bool = True
     ):
         """
@@ -101,6 +129,13 @@ class HybridAligner:
         self.enable_smoothing = enable_smoothing
         self.smoothing_window = smoothing_window
 
+        # Preprocessing + rescue knobs
+        self.enable_preprocessing = enable_preprocessing
+        self.enable_phase_b_rescue = enable_phase_b_rescue
+        self.preprocessor = None              # built lazily once video paths are known
+        self.dtw_confidence_per_frame = None  # filled after Phase A
+        self.rescue_corrections = None        # filled after rescue analysis
+
         self.verbose = verbose
 
         # Initialize feature detector based on algorithm
@@ -137,27 +172,93 @@ class HybridAligner:
         if self.verbose:
             print(msg)
 
-    def _extract_dtw_features(self, video_path: str) -> tuple:
+    def _maybe_preprocess(self, frame: np.ndarray, video_path: str) -> np.ndarray:
+        """Apply luminance LUT if preprocessor is set up. V1 is left untouched
+        by convention; V2 is remapped onto V1's luminance distribution."""
+        if self.preprocessor is None:
+            return frame
+        if video_path == self.preprocessor.v1_path:
+            return self.preprocessor.apply_to_v1(frame)
+        if video_path == self.preprocessor.v2_path:
+            return self.preprocessor.apply_to_v2(frame)
+        return frame
+
+    def _extract_dtw_features_raw(self, video_path: str) -> tuple:
         """
-        Phase A.1: Extract optical flow features for DTW.
+        Phase A.1: Extract per-frame gradient-orientation histograms for DTW.
+
+        Selected by sweep over (intensity, hue, RGB, grid-intensity, gradient,
+        combined, lowres-gray) × (raw, per-video z-score, joint z-score) ×
+        step-penalty on Plan2 ground truth: gradient histograms with per-video
+        z-score gave mean abs error ≈ 33 frames, vs ≈ 128 for intensity. See
+        combined_method/dtw_diagnostic/sweep.py.
+
+        Why gradients beat intensity: gradient orientation captures geometric
+        structure (rail edges, sleepers, fixed lineside structures) which is
+        intrinsically tied to a geographic position. Raw intensity also
+        encodes lighting/exposure, which differs between V1 and V2 takes.
+
+        We compute Sobel gx, gy on the lower 2/3 of the frame (sky cropped),
+        accumulate magnitude into a 16-bin orientation histogram over [0, 360),
+        and L1-normalise the histogram per frame.
 
         Returns:
-            features: numpy array of optical flow features
+            features: float32 array of shape (n_sampled, 16)
             frame_indices: list of original frame indices
         """
-        extractor = VideoFeatureExtractor(
-            resize_dim=(320, 240),
-            sample_rate=self.dtw_sample_rate,
-            ignore_sky=True
-        )
-        features, frame_indices = extractor.extract_features(video_path)
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video: {video_path}")
 
-        # Z-score normalization for better DTW performance
-        mean = np.mean(features, axis=0)
-        std = np.std(features, axis=0)
-        features_norm = (features - mean) / (std + 1e-6)
+        feats = []
+        frame_indices = []
+        idx = -1
+        while True:
+            ret, frame = cap.read()
+            idx += 1
+            if not ret:
+                break
+            if idx % self.dtw_sample_rate != 0:
+                continue
+            frame = self._maybe_preprocess(frame, video_path)     # luminance LUT (V2 only)
+            h = frame.shape[0]
+            crop = frame[h // 3:, :]                              # drop sky band
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+            mag = np.sqrt(gx * gx + gy * gy)
+            ang = (np.arctan2(gy, gx) + np.pi) * (180.0 / np.pi)  # 0..360
+            hist, _ = np.histogram(ang, bins=16, range=(0, 360), weights=mag)
+            hist = hist.astype(np.float32)
+            s = hist.sum()
+            if s > 1e-6:
+                hist = hist / s                                    # L1-normalise per frame
+            feats.append(hist)
+            frame_indices.append(idx)
 
-        return features_norm, frame_indices
+        cap.release()
+        return np.asarray(feats, dtype=np.float32), frame_indices
+
+    @staticmethod
+    def _to_cumulative_features(features1: np.ndarray, features2: np.ndarray) -> tuple:
+        """
+        Per-video z-score normalisation.
+
+        Each video is z-scored using its own per-dimension mean/std. The point
+        is to remove the per-video baseline (lighting, exposure, gain settings
+        that differ between recording days) while preserving the *relative*
+        variations of the descriptor along the trajectory — which are what
+        DTW should align.
+
+        Joint z-score (using stats from the concatenation of both videos) was
+        also tested and consistently underperforms per-video z-score on the
+        Plan2 ground truth. See sweep.py for the full evaluation.
+        """
+        def z(x: np.ndarray) -> np.ndarray:
+            mu = x.mean(axis=0, keepdims=True)
+            sd = x.std(axis=0, keepdims=True) + 1e-6
+            return (x - mu) / sd
+        return z(features1), z(features2)
 
     def _build_dtw_mapping(self, path: list, indices1: list, indices2: list, total_frames_v1: int) -> dict:
         """
@@ -223,12 +324,16 @@ class HybridAligner:
         """
         Extract features from a frame using the selected algorithm.
 
+        Returns lightweight (N, 2) float32 keypoint coordinates rather than
+        cv2.KeyPoint objects, which lets us cache features for thousands of
+        V2 frames without exploding memory.
+
         Returns:
-            keypoints: list of cv2.KeyPoint
+            kp_pts: np.ndarray of shape (N, 2) with (x, y) coordinates
             descriptors: numpy array of descriptors (or None)
         """
         if frame is None:
-            return [], None
+            return np.empty((0, 2), dtype=np.float32), None
 
         if len(frame.shape) == 3:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -236,9 +341,45 @@ class HybridAligner:
             gray = frame
 
         keypoints, descriptors = self.detector.detectAndCompute(gray, None)
-        return keypoints, descriptors
+        if keypoints:
+            kp_pts = np.array([kp.pt for kp in keypoints], dtype=np.float32)
+        else:
+            kp_pts = np.empty((0, 2), dtype=np.float32)
+        return kp_pts, descriptors
 
-    def _filter_matches_spatial(self, matches: list, kp1: list, kp2: list, frame_width: int) -> list:
+    def _precompute_v2_features(self, video_path: str, max_frame_idx: int) -> list:
+        """
+        Pre-extract feature descriptors for V2 by sequential decode.
+
+        Random seeking in H.264 forces the decoder back to the previous keyframe;
+        with a search window of W, each V2 frame would otherwise be decoded and
+        re-described O(W) times across overlapping windows. Reading V2 once
+        end-to-end and caching (kp_pts, des) per frame eliminates both costs.
+
+        Args:
+            video_path: Path to V2
+            max_frame_idx: Last frame index we will need (inclusive)
+
+        Returns:
+            List indexed by frame number; entries are (kp_pts, des) tuples.
+        """
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video: {video_path}")
+
+        features = []
+        idx = 0
+        while idx <= max_frame_idx:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            features.append(self._compute_features(frame))
+            idx += 1
+
+        cap.release()
+        return features
+
+    def _filter_matches_spatial(self, matches: list, kp1: np.ndarray, kp2: np.ndarray, frame_width: int) -> list:
         """
         Filter matches by spatial coherence (left/right half consistency).
 
@@ -247,8 +388,8 @@ class HybridAligner:
 
         Args:
             matches: List of cv2.DMatch objects
-            kp1: Keypoints from frame 1
-            kp2: Keypoints from frame 2
+            kp1: (N1, 2) keypoint coordinates from frame 1
+            kp2: (N2, 2) keypoint coordinates from frame 2
             frame_width: Width of the frames
 
         Returns:
@@ -261,13 +402,8 @@ class HybridAligner:
         filtered = []
 
         for m in matches:
-            pt1 = kp1[m.queryIdx].pt
-            pt2 = kp2[m.trainIdx].pt
-
-            # Check if both points are on the same side (left or right)
-            pt1_left = pt1[0] < mid_x
-            pt2_left = pt2[0] < mid_x
-
+            pt1_left = kp1[m.queryIdx, 0] < mid_x
+            pt2_left = kp2[m.trainIdx, 0] < mid_x
             if pt1_left == pt2_left:
                 filtered.append(m)
 
@@ -275,30 +411,28 @@ class HybridAligner:
 
     def _match_frames(
         self,
-        frame1: np.ndarray,
-        frame2: np.ndarray,
-        kp1: list,
-        des1: np.ndarray
+        kp1: np.ndarray,
+        des1: np.ndarray,
+        kp2: np.ndarray,
+        des2: np.ndarray,
+        frame_width: int
     ) -> int:
         """
-        Match two frames using AKAZE and return inlier count.
+        Match two pre-extracted feature sets and return inlier count.
 
         Args:
-            frame1: Reference frame (from video 1)
-            frame2: Candidate frame (from video 2)
-            kp1: Pre-computed keypoints for frame1
-            des1: Pre-computed descriptors for frame1
+            kp1: (N1, 2) keypoint coords for frame1
+            des1: descriptors for frame1
+            kp2: (N2, 2) keypoint coords for frame2
+            des2: descriptors for frame2
+            frame_width: Width of the frames (for spatial filter)
 
         Returns:
             Number of RANSAC inliers (0 if matching failed)
         """
-        if des1 is None or len(kp1) < 4:
+        if des1 is None or des2 is None:
             return 0
-
-        # Extract features from frame2
-        kp2, des2 = self._compute_features(frame2)
-
-        if des2 is None or len(kp2) < 4:
+        if len(kp1) < 4 or len(kp2) < 4:
             return 0
 
         # KNN matching with Lowe's ratio test
@@ -323,15 +457,14 @@ class HybridAligner:
             return 0
 
         # Apply spatial coherence filter
-        frame_width = frame1.shape[1] if len(frame1.shape) >= 2 else 640
         good_matches = self._filter_matches_spatial(good_matches, kp1, kp2, frame_width)
 
         if len(good_matches) < 4:
             return 0
 
         # RANSAC homography estimation
-        src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([kp2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        src_pts = kp1[[m.queryIdx for m in good_matches]].reshape(-1, 1, 2)
+        dst_pts = kp2[[m.trainIdx for m in good_matches]].reshape(-1, 1, 2)
 
         try:
             M, mask = cv2.findHomography(
@@ -489,7 +622,7 @@ class HybridAligner:
         """
         Apply post-processing smoothing to remove residual jitter.
 
-        Uses weighted median filter that respects:
+        Uses a weighted average filter that respects:
         - Monotonicity (V2 should not decrease)
         - Score-based weighting (high-confidence matches weighted more)
 
@@ -555,30 +688,66 @@ class HybridAligner:
         self._log("=" * 60)
 
         # ============================================================
+        # PHASE 0: PREPROCESSING (luminance histogram matching)
+        # ============================================================
+        if self.enable_preprocessing:
+            self._log("\n[Phase 0] Building luminance LUT (V2 → V1)...")
+            from combined_method.preprocessing import Preprocessor
+            self.preprocessor = Preprocessor(video1_path, video2_path,
+                                             n_samples=60, enabled=True)
+            self._log("  LUT built. V2 luminance will be matched to V1's distribution.")
+
+        # ============================================================
         # PHASE A: MACRO-SYNCHRONIZATION (DTW Skeleton)
         # ============================================================
-        self._log("\n[Phase A] Extracting optical flow features for DTW...")
+        self._log("\n[Phase A] Extracting gradient-orientation histogram features for DTW...")
 
-        # A.1: Extract features
-        features1, indices1 = self._extract_dtw_features(video1_path)
-        features2, indices2 = self._extract_dtw_features(video2_path)
+        # A.1: Extract raw per-frame gradient-histogram features, then apply
+        # per-video z-score normalisation. Z-scoring removes the per-video
+        # baseline (lighting, exposure, gain differences between recording
+        # days) while preserving the relative descriptor variations along the
+        # track, which are what DTW should align.
+        features1_raw, indices1 = self._extract_dtw_features_raw(video1_path)
+        features2_raw, indices2 = self._extract_dtw_features_raw(video2_path)
+        features1, features2 = self._to_cumulative_features(features1_raw, features2_raw)
 
         self._log(f"  Video 1: {len(features1)} sampled frames")
         self._log(f"  Video 2: {len(features2)} sampled frames")
 
         # A.2: Compute Open-End DTW
         self._log("\n[Phase A] Computing Open-End DTW alignment...")
-        path, cost_matrix = compute_dtw(
+        path, cost_matrix, dist_matrix = compute_dtw(
             features1, features2,
             metric='euclidean',
             step_penalty=self.dtw_step_penalty,
             open_end=True
         )
 
+        # Expose DTW artefacts so callers (e.g. the runner's visualisation
+        # phase) can reuse them instead of recomputing the whole DTW.
+        self.dtw_cost_matrix = cost_matrix      # accumulated cost (DP result)
+        self.dtw_dist_matrix = dist_matrix      # raw pairwise distance matrix
+        self.dtw_path = path
+        self.dtw_indices1 = indices1
+        self.dtw_indices2 = indices2
+        self.dtw_features1 = features1
+        self.dtw_features2 = features2
+
+        # Per-waypoint and per-V1-frame DTW confidence. Cheap to compute and
+        # used both for diagnostics and by the optional Phase B rescue logic.
+        from combined_method.dtw_confidence import (
+            compute_dtw_confidence, project_to_frames,
+        )
+        self.dtw_confidence_per_waypoint = compute_dtw_confidence(
+            dist_matrix, np.asarray(path, dtype=np.int32)
+        )
+
         # Get actual endpoint
         end_i, end_j = path[-1]
+        v1_endpoint = indices1[end_i]   # last V1 frame in the DTW path (original index)
+        v2_endpoint = indices2[end_j]   # last V2 frame in the DTW path (original index)
         self._log(f"  DTW path length: {len(path)} points")
-        self._log(f"  DTW endpoint: V1[{indices1[end_i]}] <-> V2[{indices2[end_j]}]")
+        self._log(f"  DTW endpoint: V1[{v1_endpoint}] <-> V2[{v2_endpoint}]")
 
         # Get total frame counts
         cap1_temp = cv2.VideoCapture(video1_path)
@@ -590,9 +759,41 @@ class HybridAligner:
 
         self._log(f"  Total frames: V1={total_frames_v1}, V2={total_frames_v2}")
 
-        # A.3: Build interpolated mapping
-        dtw_mapping = self._build_dtw_mapping(path, indices1, indices2, total_frames_v1)
-        self._log(f"  DTW mapping built for {len(dtw_mapping)} frames")
+        # Project per-waypoint confidence onto every original V1 frame; used by
+        # the rescue logic and exposed for diagnostics.
+        self.dtw_confidence_per_frame = project_to_frames(
+            np.asarray(path, dtype=np.int32),
+            self.dtw_confidence_per_waypoint,
+            np.asarray(indices1, dtype=np.int32),
+            total_frames_v1,
+        )
+        low_conf = float((self.dtw_confidence_per_frame < 0.25).mean())
+        self._log(f"  DTW confidence: mean={self.dtw_confidence_per_frame.mean():.3f}, "
+                  f"{low_conf * 100:.1f}% of V1 frames below 0.25")
+
+        # Detect which video's geography terminated first (open-end DTW).
+        # If the path stopped on the last column (V2 ran out of geography),
+        # we should not process V1 frames beyond v1_endpoint, since V2 has
+        # no more geographic content to match against.
+        v2_finished_first = v2_endpoint >= total_frames_v2 - self.dtw_sample_rate
+        v1_finished_first = v1_endpoint >= total_frames_v1 - self.dtw_sample_rate
+
+        if v2_finished_first and not v1_finished_first:
+            self._log(f"  V2 reached its end first (at V1 frame {v1_endpoint}). "
+                      f"Will stop V1 iteration there.")
+        elif v1_finished_first and not v2_finished_first:
+            self._log(f"  V1 reached its end first (at V2 frame {v2_endpoint}). "
+                      f"V2 has more geographic content beyond.")
+        else:
+            self._log(f"  Both videos reached their ends simultaneously.")
+
+        # A.3: Build interpolated mapping (only for V1 frames within the DTW path)
+        # Cap the mapping at v1_endpoint to avoid extrapolating beyond the
+        # geographic overlap.
+        max_v1_to_map = min(total_frames_v1, v1_endpoint + 1)
+        dtw_mapping = self._build_dtw_mapping(path, indices1, indices2, max_v1_to_map)
+        self._log(f"  DTW mapping built for {len(dtw_mapping)} frames "
+                  f"(out of {total_frames_v1} V1 frames)")
 
         # ============================================================
         # PHASE B: MICRO-ALIGNMENT (AKAZE Refinement with Top-K)
@@ -601,8 +802,19 @@ class HybridAligner:
         self._log(f"  DTW distance penalty k={self.dtw_distance_penalty_k}")
         self._log(f"  Top-K candidates: {self.top_k_candidates}")
 
+        # Pre-extract V2 features by sequential read. The fine phase will look
+        # up cached (kp, des) by frame index rather than seeking and re-running
+        # the detector on the same frame across overlapping windows.
+        max_v2_needed = min(
+            total_frames_v2 - 1,
+            max(dtw_mapping.values()) + self.search_window
+        )
+        self._log(f"\n[Phase B] Pre-extracting V2 features for frames "
+                  f"[0..{max_v2_needed}] (sequential read)...")
+        v2_features = self._precompute_v2_features(video2_path, max_v2_needed)
+        self._log(f"  Cached features for {len(v2_features)} V2 frames")
+
         cap1 = cv2.VideoCapture(video1_path)
-        cap2 = cv2.VideoCapture(video2_path)
 
         # Store all candidates for global optimization
         all_candidates = []  # List of lists: [(v2_frame, weighted_score, raw_inliers), ...]
@@ -610,10 +822,18 @@ class HybridAligner:
 
         v1_frame_idx = 0
         processed_count = 0
+        n_v2_cached = len(v2_features)
 
         while True:
             ret1, frame1 = cap1.read()
             if not ret1:
+                break
+
+            # Stop iterating V1 once we have left the geographic overlap
+            # (i.e. V2 has no more matching content beyond v1_endpoint).
+            if v1_frame_idx > v1_endpoint:
+                self._log(f"  Reached DTW V1 endpoint ({v1_endpoint}); "
+                          f"stopping at V1 frame {v1_frame_idx}.")
                 break
 
             # Apply sample rate
@@ -631,22 +851,20 @@ class HybridAligner:
 
             # Define strict search window around DTW prediction
             search_start = max(0, expected_v2_frame - self.search_window)
-            search_end = min(total_frames_v2 - 1, expected_v2_frame + self.search_window)
+            search_end = min(n_v2_cached - 1, expected_v2_frame + self.search_window)
 
-            # Extract AKAZE features for frame1 (once)
+            # Extract features for frame1 (once)
             kp1, des1 = self._compute_features(frame1)
+            frame_width = frame1.shape[1] if frame1.ndim >= 2 else 640
 
             # Collect ALL candidates with their weighted scores
             candidates = []
 
             if des1 is not None and len(kp1) >= 4:
                 for candidate_idx in range(search_start, search_end + 1):
-                    cap2.set(cv2.CAP_PROP_POS_FRAMES, candidate_idx)
-                    ret2, frame2 = cap2.read()
-                    if not ret2:
-                        continue
+                    kp2, des2 = v2_features[candidate_idx]
 
-                    raw_inliers = self._match_frames(frame1, frame2, kp1, des1)
+                    raw_inliers = self._match_frames(kp1, des1, kp2, des2, frame_width)
                     weighted_score = self._compute_weighted_score(
                         raw_inliers, candidate_idx, expected_v2_frame
                     )
@@ -675,7 +893,90 @@ class HybridAligner:
             v1_frame_idx += 1
 
         cap1.release()
-        cap2.release()
+        # Free the V2 feature cache before the heavy DP phase.
+        del v2_features
+
+        # Snapshot the alignment as "DTW only": the raw Phase-A prediction with
+        # no influence from feature matching. Built on the same V1 frames as the
+        # other snapshots so the rendered videos line up frame-for-frame and the
+        # user can compare DTW vs DTW+features vs final side by side.
+        self.matches_dtw_only = [{
+            'v1_frame': info['v1_frame'],
+            'v2_frame': info['dtw_prediction'],
+            'score': 0,
+            'source': 'dtw',
+            'dtw_prediction': info['dtw_prediction'],
+            'weighted_score': 0.0,
+        } for info in frame_info]
+
+        # Snapshot the alignment as "DTW + feature matching, pre-rectification":
+        # the best candidate per frame from the fine phase, with a DTW fallback
+        # when no candidate hits min_inliers_threshold. Exposed on the instance
+        # so the runner can render an intermediate video for visual comparison
+        # against the post-Phase-C/D output.
+        self.matches_pre_rectification = []
+        for i, candidates in enumerate(all_candidates):
+            info = frame_info[i]
+            if candidates and candidates[0][2] >= self.min_inliers_threshold:
+                best = candidates[0]
+                source = f"{self.algorithm.lower()}_refined"
+            else:
+                best = (info['dtw_prediction'], 0.0, 0)
+                source = "dtw_fallback"
+            self.matches_pre_rectification.append({
+                'v1_frame': info['v1_frame'],
+                'v2_frame': best[0],
+                'score': best[2],
+                'source': source,
+                'dtw_prediction': info['dtw_prediction'],
+                'weighted_score': best[1],
+            })
+
+        # ============================================================
+        # PHASE B': RESCUE — override DTW where the matcher gave coherent
+        # contradicting evidence inside a low-confidence zone
+        # ============================================================
+        if self.enable_phase_b_rescue and self.dtw_confidence_per_frame is not None:
+            from combined_method.phase_b_rescue import (
+                RescueConfig, detect_rescue_corrections,
+            )
+            rescue_inputs = []
+            for i, candidates in enumerate(all_candidates):
+                info = frame_info[i]
+                if candidates and candidates[0][2] >= 1:
+                    v2_raw = int(candidates[0][0])
+                    score = int(candidates[0][2])
+                else:
+                    v2_raw = int(info['dtw_prediction'])
+                    score = 0
+                rescue_inputs.append({
+                    'v1_frame': info['v1_frame'],
+                    'dtw_prediction': int(info['dtw_prediction']),
+                    'v2_frame_raw': v2_raw,
+                    'score': score,
+                })
+
+            corrections = detect_rescue_corrections(
+                rescue_inputs, self.dtw_confidence_per_frame,
+            )
+            self.rescue_corrections = dict(corrections)
+
+            if corrections:
+                # Shift DTW prediction in frame_info so Phase C sees the
+                # corrected anchor when it weighs candidates.
+                for info in frame_info:
+                    v1 = info['v1_frame']
+                    if v1 in corrections:
+                        info['dtw_prediction'] = int(info['dtw_prediction'] + corrections[v1])
+                # Re-emit matches_pre_rectification with corrected predictions
+                # so diagnostic videos reflect the rescue.
+                for i, m in enumerate(self.matches_pre_rectification):
+                    info = frame_info[i]
+                    m['dtw_prediction'] = info['dtw_prediction']
+                self._log(f"\n[Phase B'] Rescue corrected {len(corrections)} V1 frames "
+                          f"(consistent matcher deviation in low-confidence zones)")
+            else:
+                self._log("\n[Phase B'] No rescue applied — no consistent matcher deviation detected")
 
         # ============================================================
         # PHASE C: GLOBAL OPTIMIZATION (Monotonic Path)
@@ -695,7 +996,7 @@ class HybridAligner:
                 if raw_inliers < self.min_inliers_threshold:
                     source = "dtw_fallback"
                 else:
-                    source = "akaze_refined"
+                    source = f"{self.algorithm.lower()}_refined"
 
                 results.append({
                     'v1_frame': info['v1_frame'],
@@ -715,7 +1016,7 @@ class HybridAligner:
 
                 if candidates and candidates[0][2] >= self.min_inliers_threshold:
                     best = candidates[0]
-                    source = "akaze_refined"
+                    source = f"{self.algorithm.lower()}_refined"
                 else:
                     best = (info['dtw_prediction'], 0.0, 0)
                     source = "dtw_fallback"
@@ -740,7 +1041,7 @@ class HybridAligner:
         # STATISTICS
         # ============================================================
         dtw_fallback_count = sum(1 for r in results if r['source'] == 'dtw_fallback')
-        akaze_refined_count = len(results) - dtw_fallback_count
+        refined_count = len(results) - dtw_fallback_count
 
         # Check monotonicity
         monotonic_violations = 0
@@ -755,7 +1056,7 @@ class HybridAligner:
         self._log("ALIGNMENT COMPLETE (v2 - Anti-Trembling)")
         self._log("=" * 60)
         self._log(f"  Total matches: {len(results)}")
-        self._log(f"  AKAZE refined: {akaze_refined_count} ({100*akaze_refined_count/max(1,len(results)):.1f}%)")
+        self._log(f"  {self.algorithm} refined: {refined_count} ({100*refined_count/max(1,len(results)):.1f}%)")
         self._log(f"  DTW fallback:  {dtw_fallback_count} ({100*dtw_fallback_count/max(1,len(results)):.1f}%)")
         self._log(f"  Monotonicity violations: {monotonic_violations}")
         if self.enable_global_optimization:
