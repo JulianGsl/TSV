@@ -38,8 +38,9 @@ Module organisation
   thin wrapper.
 - Side modules: `preprocessing.py`, `dtw_confidence.py`,
   `phase_b_rescue.py`, all in this package.
-- DTW core (`compute_dtw`) is imported from `Old_version/new_method/`
-  for historical reasons; see `claude_notes/02_codebase_architecture.md`.
+- DTW core (`compute_dtw`) is imported from `combined_method.dtw_core`
+  (see import below); `Old_version/new_method/` only re-exports it as a
+  backward-compatibility shim.
 """
 
 import cv2
@@ -621,7 +622,7 @@ class HybridAligner:
         """
         Apply post-processing smoothing to remove residual jitter.
 
-        Uses weighted median filter that respects:
+        Uses a weighted average filter that respects:
         - Monotonicity (V2 should not decrease)
         - Score-based weighting (high-confidence matches weighted more)
 
@@ -699,13 +700,13 @@ class HybridAligner:
         # ============================================================
         # PHASE A: MACRO-SYNCHRONIZATION (DTW Skeleton)
         # ============================================================
-        self._log("\n[Phase A] Extracting optical flow features for DTW...")
+        self._log("\n[Phase A] Extracting gradient-orientation histogram features for DTW...")
 
-        # A.1: Extract raw per-frame flow features, then convert to cumulative
-        # features (running sum along time) and jointly normalize. Cumulative
-        # features represent geographic displacement and are speed-independent,
-        # so DTW aligns the two sequences by position along the track rather
-        # than by instantaneous speed.
+        # A.1: Extract raw per-frame gradient-histogram features, then apply
+        # per-video z-score normalisation. Z-scoring removes the per-video
+        # baseline (lighting, exposure, gain differences between recording
+        # days) while preserving the relative descriptor variations along the
+        # track, which are what DTW should align.
         features1_raw, indices1 = self._extract_dtw_features_raw(video1_path)
         features2_raw, indices2 = self._extract_dtw_features_raw(video2_path)
         features1, features2 = self._to_cumulative_features(features1_raw, features2_raw)

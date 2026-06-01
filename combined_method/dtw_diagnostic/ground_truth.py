@@ -25,8 +25,12 @@ PLAN2_ANCHORS = [
 
 
 def get_anchors(plan_name: str = "Plan2"):
-    """Return the Plan2 anchors (hardcoded). Other plans return None."""
-    if plan_name != "Plan2":
+    """Return the Plan2 anchors (hardcoded). Other plans return None.
+
+    Case-insensitive match: "Plan2", "plan2", "PLAN2" all resolve to the
+    same set of anchors.
+    """
+    if plan_name.strip().lower() != "plan2":
         return None
     return list(PLAN2_ANCHORS)
 
