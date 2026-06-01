@@ -52,10 +52,10 @@ def get_available_plans():
 
 def select_algorithm():
     """
-    Display algorithm selection menu and return selected algorithm.
+    Display algorithm selection menu and return selected algorithm(s).
 
     Returns:
-        str: Selected algorithm name ("AKAZE", "BRISK", or "ORB")
+        list: List of selected algorithm names, or list of all algorithms
     """
     descriptions = {
         "AKAZE": "Recommended - Good balance of speed and accuracy",
@@ -65,12 +65,17 @@ def select_algorithm():
     print("\n🔧 Select Feature Matching Algorithm:")
     for i, algo in enumerate(SUPPORTED_ALGORITHMS, 1):
         print(f"   {i}. {algo} - {descriptions.get(algo, '')}")
+    print(f"   {len(SUPPORTED_ALGORITHMS) + 1}. All (run all 3 algorithms)")
 
     while True:
-        choice = input(f"\n➜ Select algorithm (1-{len(SUPPORTED_ALGORITHMS)}) [default: 1 AKAZE]: ").strip() or "1"
-        if choice.isdigit() and 1 <= int(choice) <= len(SUPPORTED_ALGORITHMS):
-            return SUPPORTED_ALGORITHMS[int(choice) - 1]
-        print(f"Invalid choice. Please enter 1-{len(SUPPORTED_ALGORITHMS)}.")
+        choice = input(f"\n➜ Select algorithm (1-{len(SUPPORTED_ALGORITHMS) + 1}) [default: 1 AKAZE]: ").strip() or "1"
+        if choice.isdigit():
+            choice_int = int(choice)
+            if 1 <= choice_int <= len(SUPPORTED_ALGORITHMS):
+                return [SUPPORTED_ALGORITHMS[choice_int - 1]]
+            elif choice_int == len(SUPPORTED_ALGORITHMS) + 1:
+                return SUPPORTED_ALGORITHMS  # Return all algorithms
+        print(f"Invalid choice. Please enter 1-{len(SUPPORTED_ALGORITHMS) + 1}.")
 
 
 def process_plan_hybrid(plan_name, algorithm="AKAZE",
@@ -85,7 +90,7 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE",
         algorithm: Feature matching algorithm ("AKAZE", "BRISK", or "ORB")
 
     Generates:
-    - Aligned videos (simple, features, flow modes)
+    - Aligned videos (simple, features, matches modes)
     - Alignment visualizations
     - Quality metrics
     - HTML report
@@ -226,8 +231,8 @@ def process_plan_hybrid(plan_name, algorithm="AKAZE",
 
     video_configs = [
         ("simple", "simple side-by-side (fastest)"),
-        ("features", "with AKAZE keypoints"),
-        ("flow", "with optical flow visualization")
+        ("features", f"with {algorithm} keypoints"),
+        ("matches", f"with {algorithm} keypoint correspondences drawn between V1 and V2"),
     ]
 
     for mode, description in video_configs:
@@ -422,28 +427,39 @@ def main():
             return
 
     # ------- Algorithm selection ----------------------------------------
-    selected_algorithm = args.algorithm or select_algorithm()
+    if args.algorithm:
+        # CLI arg provided: convert to list
+        selected_algorithms = [args.algorithm]
+    else:
+        # Interactive selection (returns list)
+        selected_algorithms = select_algorithm()
 
     # ------- Run --------------------------------------------------------
     total_start = time.time()
-    for i, plan in enumerate(selected_plans, 1):
-        print(f"\n{'─' * 70}")
-        print(f"[{i}/{len(selected_plans)}] {plan}")
-        print(f"{'─' * 70}")
-        process_plan_hybrid(
-            plan,
-            algorithm=selected_algorithm,
-            dtw_sample_rate=args.dtw_sample_rate,
-            feature_sample_rate=args.feature_sample_rate,
-            search_window=args.search_window,
-            min_inliers=args.min_inliers,
-            dtw_step_penalty=args.dtw_step_penalty,
-        )
+    total_combinations = len(selected_plans) * len(selected_algorithms)
+    combination_count = 0
+
+    for plan in selected_plans:
+        for algorithm in selected_algorithms:
+            combination_count += 1
+            print(f"\n{'─' * 70}")
+            print(f"[{combination_count}/{total_combinations}] {plan} + {algorithm}")
+            print(f"{'─' * 70}")
+            process_plan_hybrid(
+                plan,
+                algorithm=algorithm,
+                dtw_sample_rate=args.dtw_sample_rate,
+                feature_sample_rate=args.feature_sample_rate,
+                search_window=args.search_window,
+                min_inliers=args.min_inliers,
+                dtw_step_penalty=args.dtw_step_penalty,
+            )
 
     total_elapsed = time.time() - total_start
     print(f"\n{'=' * 70}")
     print(f"ALL PROCESSING COMPLETE")
     print(f"Total time: {total_elapsed:.1f}s ({total_elapsed / 60:.1f}m)")
+    print(f"Processed: {len(selected_plans)} plan(s) × {len(selected_algorithms)} algorithm(s) = {total_combinations} combination(s)")
     print(f"{'=' * 70}")
 
 

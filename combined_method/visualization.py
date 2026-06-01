@@ -123,10 +123,12 @@ def draw_features_side_by_side(frame1, frame2, v1_idx, v2_idx, source="", score=
 
 def draw_optical_flow_side_by_side(frame1, frame2, prev_frame1, prev_frame2, v1_idx, v2_idx, source="", score=0, algorithm="AKAZE"):
     """
-    Create side-by-side view with optical flow visualization.
+    DEPRECATED. Side-by-side view with optical flow visualisation.
 
-    Args:
-        algorithm: Feature matching algorithm name for display in overlay
+    Replaced by `draw_matches_side_by_side`, which is more interpretable
+    (lines between matched keypoints rather than HSV-coded motion field).
+    Kept for backward compatibility and possible ablation use.
+    Not invoked by the current pipeline.
     """
     if frame1 is None or frame2 is None:
         return None
@@ -164,6 +166,94 @@ def draw_optical_flow_side_by_side(frame1, frame2, prev_frame1, prev_frame2, v1_
     return draw_simple_side_by_side(frame1_flow, frame2_flow, v1_idx, v2_idx, source, score, algorithm)
 
 
+def draw_matches_side_by_side(frame1, frame2, v1_idx, v2_idx,
+                              source="", score=0, algorithm="AKAZE"):
+    """
+    Side-by-side view with feature correspondences drawn as lines between
+    V1 keypoints and V2 keypoints. Inliers from a RANSAC homography only.
+
+    This is the "matches" mode: it visually documents what the inner
+    matcher actually saw when it made its decision. Useful for the
+    thesis: shows what alignment "means" at the pixel level.
+    """
+    if frame1 is None or frame2 is None:
+        return None
+
+    # Detector
+    if algorithm.upper() == "BRISK":
+        detector = cv2.BRISK_create()
+    elif algorithm.upper() == "ORB":
+        detector = cv2.ORB_create(nfeatures=5000)
+    else:
+        detector = cv2.AKAZE_create(descriptor_type=cv2.AKAZE_DESCRIPTOR_MLDB,
+                                    threshold=0.001)
+
+    gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+    kp1, des1 = detector.detectAndCompute(gray1, None)
+    kp2, des2 = detector.detectAndCompute(gray2, None)
+
+    if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
+        # Fall back to plain side-by-side if matching impossible.
+        return draw_simple_side_by_side(frame1, frame2, v1_idx, v2_idx,
+                                        source, score, algorithm)
+
+    # KNN + Lowe ratio test.
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+    try:
+        knn = bf.knnMatch(des1, des2, k=2)
+    except cv2.error:
+        return draw_simple_side_by_side(frame1, frame2, v1_idx, v2_idx,
+                                        source, score, algorithm)
+
+    good = []
+    for pair in knn:
+        if len(pair) == 2:
+            m, n = pair
+            if m.distance < 0.75 * n.distance:
+                good.append(m)
+
+    # RANSAC inliers (homography). Only inliers are drawn.
+    inlier_matches = []
+    if len(good) >= 4:
+        src = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+        dst = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+        H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 2.5,
+                                     maxIters=2000, confidence=0.999)
+        if mask is not None:
+            inlier_matches = [m for m, ok in zip(good, mask.ravel()) if ok]
+
+    # cv2.drawMatches stacks images horizontally and draws colored lines.
+    # We pass only the inliers, with random per-match colors for legibility.
+    if inlier_matches:
+        combined = cv2.drawMatches(
+            frame1, kp1, frame2, kp2, inlier_matches, None,
+            matchColor=None,             # random color per match
+            singlePointColor=(80, 80, 80),
+            flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+        )
+    else:
+        combined = np.hstack([frame1, frame2])
+
+    # Overlay banner with metadata, similar to the simple/features modes.
+    h, w = combined.shape[:2]
+    overlay = combined.copy()
+    cv2.rectangle(overlay, (0, h - 60), (w, h), (0, 0, 0), -1)
+    combined = cv2.addWeighted(overlay, 0.7, combined, 0.3, 0)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    cv2.putText(combined, f"Video 1 - Frame {v1_idx}", (10, h - 35),
+                font, 0.6, (255, 255, 255), 2)
+    cv2.putText(combined, f"Video 2 - Frame {v2_idx}", (frame1.shape[1] + 10, h - 35),
+                font, 0.6, (255, 255, 255), 2)
+    n_in = len(inlier_matches)
+    color = (0, 255, 0) if source != "dtw_fallback" else (0, 165, 255)
+    text = (f"{algorithm}: {n_in} RANSAC inliers, source={source}"
+            if source != "dtw_fallback"
+            else f"DTW fallback (no refined match), visual probe: {n_in} inliers")
+    cv2.putText(combined, text, (10, h - 10), font, 0.6, color, 2)
+    return combined
+
+
 def create_aligned_video(
     video1_path: str,
     video2_path: str,
@@ -182,7 +272,7 @@ def create_aligned_video(
         video2_path: Path to video 2
         matches: List of match dictionaries from hybrid alignment
         output_path: Output video path
-        mode: "simple", "features", or "flow"
+        mode: "simple", "features", or "matches"
         max_frames: Limit number of frames (None for all)
         fps: Output FPS (None to use video1's FPS)
         algorithm: Feature matching algorithm name (AKAZE, BRISK, ORB) for display
@@ -248,12 +338,8 @@ def create_aligned_video(
         # Generate visualization based on mode
         if mode == "features":
             combined = draw_features_side_by_side(frame1, frame2, v1_idx, v2_idx, source, score, algorithm)
-        elif mode == "flow":
-            combined = draw_optical_flow_side_by_side(
-                frame1, frame2, prev_frame1, prev_frame2, v1_idx, v2_idx, source, score, algorithm
-            )
-            prev_frame1 = frame1.copy()
-            prev_frame2 = frame2.copy()
+        elif mode == "matches":
+            combined = draw_matches_side_by_side(frame1, frame2, v1_idx, v2_idx, source, score, algorithm)
         else:  # simple
             combined = draw_simple_side_by_side(frame1, frame2, v1_idx, v2_idx, source, score, algorithm)
 
